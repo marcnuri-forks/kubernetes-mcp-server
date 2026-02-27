@@ -204,7 +204,7 @@ func getMcpReqUserAgent(req mcp.Request) string {
 		return ""
 	}
 	initParams := session.InitializeParams()
-	if initParams == nil || (initParams.ClientInfo.Name == "" && initParams.ClientInfo.Version == "") {
+	if initParams == nil || initParams.ClientInfo == nil || (initParams.ClientInfo.Name == "" && initParams.ClientInfo.Version == "") {
 		return ""
 	}
 	return fmt.Sprintf("%s/%s", initParams.ClientInfo.Name, initParams.ClientInfo.Version)
