@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kubernetes MCP Apps Viewer</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a2e;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a2e;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #374151;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 12px;
+    font-size: 14px;
+  }
+  #app { min-height: 40px; }
+  .status { color: var(--muted); font-style: italic; }
+  .tool-name { font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="app"><p class="status">Initializing...</p></div>
+
+<!-- Vendored: htm + Preact standalone UMD -->
+<script>VENDOR_HTM_PREACT_PLACEHOLDER</script>
+
+<!-- Vendored: @preact/signals-core -->
+<script>VENDOR_SIGNALS_CORE_PLACEHOLDER</script>
+
+<script>
+// MCP Apps postMessage protocol implementation
+(function() {
+  'use strict';
+
+  let nextId = 1;
+  const pending = new Map();
+  const handlers = {};
+
+  function sendRequest(method, params) {
+    const id = nextId++;
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    return new Promise(function(resolve, reject) {
+      pending.set(id, { resolve: resolve, reject: reject });
+    });
+  }
+
+  function sendNotification(method, params) {
+    window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
+  }
+
+  function onNotification(method, handler) {
+    handlers[method] = handler;
+  }
+
+  window.addEventListener('message', function(event) {
+    var msg = event.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    // Response to our request
+    if (msg.id && pending.has(msg.id)) {
+      var p = pending.get(msg.id);
+      pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message));
+      else p.resolve(msg.result);
+      return;
+    }
+    // Incoming notification
+    if (msg.method && handlers[msg.method]) {
+      handlers[msg.method](msg.params);
+    }
+    // Incoming request (ping, teardown)
+    if (msg.method && msg.id) {
+      if (msg.method === 'ping') {
+        window.parent.postMessage({ jsonrpc: '2.0', id: msg.id, result: {} }, '*');
+      }
+    }
+  });
+
+  async function initialize() {
+    var result = await sendRequest('ui/initialize', {
+      appInfo: { name: 'kubernetes-mcp-viewer', version: '1.0.0' },
+      protocolVersion: '2026-01-26',
+      appCapabilities: {},
+    });
+    sendNotification('ui/notifications/initialized', {});
+    return result;
+  }
+
+  // Bootstrap
+  var appEl = document.getElementById('app');
+
+  initialize().then(function(result) {
+    var toolName = '(unknown)';
+    if (result && result.hostContext && result.hostContext.toolInfo && result.hostContext.toolInfo.tool) {
+      toolName = result.hostContext.toolInfo.tool.name;
+    }
+    // Apply host theme if provided
+    if (result && result.hostContext && result.hostContext.theme === 'dark') {
+      document.documentElement.style.setProperty('--bg', '#1a1a2e');
+      document.documentElement.style.setProperty('--fg', '#e5e7eb');
+      document.documentElement.style.setProperty('--muted', '#9ca3af');
+      document.documentElement.style.setProperty('--border', '#374151');
+    }
+    appEl.innerHTML = '<p>Kubernetes MCP Apps Viewer</p><p class="status">Tool: <span class="tool-name">' +
+      toolName.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span></p>';
+
+    // Listen for tool result
+    onNotification('ui/notifications/tool-result', function(params) {
+      // Phase 2 will render structured content here
+    });
+  }).catch(function(err) {
+    appEl.innerHTML = '<p class="status">Failed to initialize: ' +
+      (err.message || 'unknown error').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</p>';
+  });
+})();
+</script>
+</body>
+</html>

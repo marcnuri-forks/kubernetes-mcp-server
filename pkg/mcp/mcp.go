@@ -16,6 +16,7 @@ import (
 	"github.com/containers/kubernetes-mcp-server/pkg/api"
 	"github.com/containers/kubernetes-mcp-server/pkg/config"
 	internalk8s "github.com/containers/kubernetes-mcp-server/pkg/kubernetes"
+	"github.com/containers/kubernetes-mcp-server/pkg/mcpapps"
 	"github.com/containers/kubernetes-mcp-server/pkg/metrics"
 	"github.com/containers/kubernetes-mcp-server/pkg/output"
 	"github.com/containers/kubernetes-mcp-server/pkg/prompts"
@@ -72,6 +73,16 @@ type Server struct {
 }
 
 func NewServer(configuration Configuration, targetProvider internalk8s.Provider) (*Server, error) {
+	caps := &mcp.ServerCapabilities{
+		Prompts: &mcp.PromptCapabilities{ListChanged: !configuration.Stateless},
+		Tools:   &mcp.ToolCapabilities{ListChanged: !configuration.Stateless},
+		Logging: &mcp.LoggingCapabilities{},
+	}
+	if configuration.AppsEnabled {
+		caps.AddExtension("io.modelcontextprotocol/ui", nil)
+		caps.Resources = &mcp.ResourceCapabilities{}
+	}
+
 	s := &Server{
 		configuration: &configuration,
 		server: mcp.NewServer(
@@ -82,12 +93,7 @@ func NewServer(configuration Configuration, targetProvider internalk8s.Provider)
 				WebsiteURL: version.WebsiteURL,
 			},
 			&mcp.ServerOptions{
-				Capabilities: &mcp.ServerCapabilities{
-					Resources: nil,
-					Prompts:   &mcp.PromptCapabilities{ListChanged: !configuration.Stateless},
-					Tools:     &mcp.ToolCapabilities{ListChanged: !configuration.Stateless},
-					Logging:   &mcp.LoggingCapabilities{},
-				},
+				Capabilities: caps,
 				Instructions: configuration.ServerInstructions,
 			}),
 		p: targetProvider,
@@ -104,6 +110,10 @@ func NewServer(configuration Configuration, targetProvider internalk8s.Provider)
 		return nil, fmt.Errorf("failed to initialize metrics: %w", err)
 	}
 	s.metrics = metricsInstance
+
+	if configuration.AppsEnabled {
+		s.registerMCPAppResources()
+	}
 
 	s.server.AddReceivingMiddleware(sessionInjectionMiddleware)
 	s.server.AddReceivingMiddleware(traceContextPropagationMiddleware)
@@ -219,10 +229,14 @@ func (s *Server) collectApplicableTools(targets []string) []api.ServerTool {
 		s.configuration.isToolApplicable,
 		ShouldIncludeTargetListTool(s.p.GetTargetParameterName(), targets),
 	)
-	mutator := ComposeMutators(
+	mutators := []ToolMutator{
 		WithTargetParameter(s.p.GetDefaultTarget(), s.p.GetTargetParameterName(), targets),
 		WithTargetListTool(s.p.GetDefaultTarget(), s.p.GetTargetParameterName(), targets),
-	)
+	}
+	if s.configuration.AppsEnabled {
+		mutators = append(mutators, WithAppsMeta())
+	}
+	mutator := ComposeMutators(mutators...)
 
 	tools := make([]api.ServerTool, 0)
 	for _, toolset := range s.configuration.Toolsets() {
@@ -264,6 +278,26 @@ func (s *Server) registerPrompt(prompt api.ServerPrompt) error {
 	}
 	s.server.AddPrompt(mcpPrompt, promptHandler)
 	return nil
+}
+
+// registerMCPAppResources registers the MCP Apps viewer HTML as a ui:// resource
+func (s *Server) registerMCPAppResources() {
+	s.server.AddResource(
+		&mcp.Resource{
+			URI:      mcpapps.ViewerResourceURI,
+			Name:     "Kubernetes MCP Apps Viewer",
+			MIMEType: mcpapps.ResourceMIMEType,
+		},
+		func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+			return &mcp.ReadResourceResult{
+				Contents: []*mcp.ResourceContents{{
+					URI:      mcpapps.ViewerResourceURI,
+					MIMEType: mcpapps.ResourceMIMEType,
+					Text:     mcpapps.ViewerHTML(),
+				}},
+			}, nil
+		},
+	)
 }
 
 // metricsMiddleware returns a metrics middleware with access to the server's metrics system

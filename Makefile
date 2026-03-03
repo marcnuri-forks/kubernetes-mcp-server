@@ -144,5 +144,19 @@ local-env-teardown: ## Tear down the local Kind cluster
 print-git-tag-version: ## Print the GIT_TAG_VERSION
 	@echo $(GIT_TAG_VERSION)
 
+##@ MCP Apps
+
+HTM_VERSION ?= 3.1.1
+SIGNALS_CORE_VERSION ?= 1.8.0
+MCP_APPS_VENDOR_DIR ?= pkg/mcpapps/vendor
+
+.PHONY: vendor-js
+vendor-js: ## Download vendored JavaScript dependencies for MCP Apps
+	@mkdir -p $(MCP_APPS_VENDOR_DIR)
+	curl -sL "https://cdn.jsdelivr.net/npm/htm@$(HTM_VERSION)/preact/standalone.umd.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/htm-preact-standalone.umd.js
+	curl -sL "https://cdn.jsdelivr.net/npm/@preact/signals-core@$(SIGNALS_CORE_VERSION)/dist/signals-core.module.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/signals-core.module.js
+
 # Include build configuration files
 -include build/*.mk
