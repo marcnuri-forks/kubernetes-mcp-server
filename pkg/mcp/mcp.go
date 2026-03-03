@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -111,10 +112,6 @@ func NewServer(configuration Configuration, targetProvider internalk8s.Provider)
 	}
 	s.metrics = metricsInstance
 
-	if configuration.AppsEnabled {
-		s.registerMCPAppResources()
-	}
-
 	s.server.AddReceivingMiddleware(sessionInjectionMiddleware)
 	s.server.AddReceivingMiddleware(traceContextPropagationMiddleware)
 	s.server.AddReceivingMiddleware(tracingMiddleware(version.BinaryName + "/mcp"))
@@ -175,6 +172,11 @@ func (s *Server) reloadToolsets() error {
 	)
 	if err != nil {
 		return err
+	}
+
+	// Register per-tool MCP App resources when apps are enabled
+	if s.configuration.AppsEnabled {
+		s.registerMCPAppResources(newTools)
 	}
 
 	// Only hold write lock for the final assignment
@@ -280,24 +282,30 @@ func (s *Server) registerPrompt(prompt api.ServerPrompt) error {
 	return nil
 }
 
-// registerMCPAppResources registers the MCP Apps viewer HTML as a ui:// resource
-func (s *Server) registerMCPAppResources() {
-	s.server.AddResource(
-		&mcp.Resource{
-			URI:      mcpapps.ViewerResourceURI,
-			Name:     "Kubernetes MCP Apps Viewer",
-			MIMEType: mcpapps.ResourceMIMEType,
-		},
-		func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-			return &mcp.ReadResourceResult{
-				Contents: []*mcp.ResourceContents{{
-					URI:      mcpapps.ViewerResourceURI,
-					MIMEType: mcpapps.ResourceMIMEType,
-					Text:     mcpapps.ViewerHTML(),
-				}},
-			}, nil
-		},
-	)
+// registerMCPAppResources registers per-tool viewer HTML as ui:// resources.
+// Each tool gets its own resource URI (e.g. ui://kubernetes-mcp-server/tool/pods_list)
+// so the viewer knows which tool it belongs to and can call it via serverTools.
+func (s *Server) registerMCPAppResources(toolNames []string) {
+	for _, toolName := range toolNames {
+		tn := toolName // capture for closure
+		uri := mcpapps.ToolResourceURI(tn)
+		s.server.AddResource(
+			&mcp.Resource{
+				URI:      uri,
+				Name:     "Kubernetes MCP Apps Viewer: " + tn,
+				MIMEType: mcpapps.ResourceMIMEType,
+			},
+			func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+				return &mcp.ReadResourceResult{
+					Contents: []*mcp.ResourceContents{{
+						URI:      uri,
+						MIMEType: mcpapps.ResourceMIMEType,
+						Text:     mcpapps.ViewerHTMLForTool(tn),
+					}},
+				}, nil
+			},
+		)
+	}
 }
 
 // metricsMiddleware returns a metrics middleware with access to the server's metrics system
@@ -440,6 +448,11 @@ func NewTextResult(content string, err error) *mcp.CallToolResult {
 // The Content field contains the JSON-serialized form of structuredContent
 // for backward compatibility with MCP clients that don't support structuredContent.
 //
+// Per the MCP specification, structuredContent must marshal to a JSON object.
+// If structuredContent is a slice/array, it is automatically wrapped in
+// {"items": [...]} to satisfy this requirement. The viewer extracts .items
+// for array data.
+//
 // Per the MCP specification:
 // "For backwards compatibility, a tool that returns structured content SHOULD
 // also return the serialized JSON in a TextContent block."
@@ -466,7 +479,17 @@ func NewStructuredResult(content string, structuredContent any, err error) *mcp.
 		},
 	}
 	if structuredContent != nil {
-		result.StructuredContent = structuredContent
+		result.StructuredContent = ensureStructuredObject(structuredContent)
 	}
 	return result
+}
+
+// ensureStructuredObject wraps slice/array values in a {"items": ...} object
+// because the MCP specification requires structuredContent to be a JSON object.
+func ensureStructuredObject(v any) any {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+		return map[string]any{"items": v}
+	}
+	return v
 }

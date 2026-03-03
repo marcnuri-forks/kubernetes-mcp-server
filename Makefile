@@ -147,7 +147,7 @@ print-git-tag-version: ## Print the GIT_TAG_VERSION
 ##@ MCP Apps
 
 HTM_VERSION ?= 3.1.1
-SIGNALS_CORE_VERSION ?= 1.8.0
+CHART_JS_VERSION ?= 4.4.8
 MCP_APPS_VENDOR_DIR ?= pkg/mcpapps/vendor
 
 .PHONY: vendor-js
@@ -155,8 +155,8 @@ vendor-js: ## Download vendored JavaScript dependencies for MCP Apps
 	@mkdir -p $(MCP_APPS_VENDOR_DIR)
 	curl -sL "https://cdn.jsdelivr.net/npm/htm@$(HTM_VERSION)/preact/standalone.umd.js" \
 		-o $(MCP_APPS_VENDOR_DIR)/htm-preact-standalone.umd.js
-	curl -sL "https://cdn.jsdelivr.net/npm/@preact/signals-core@$(SIGNALS_CORE_VERSION)/dist/signals-core.module.js" \
-		-o $(MCP_APPS_VENDOR_DIR)/signals-core.module.js
+	curl -sL "https://cdn.jsdelivr.net/npm/chart.js@$(CHART_JS_VERSION)/dist/chart.umd.min.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/chart.umd.min.js
 
 # Include build configuration files
 -include build/*.mk

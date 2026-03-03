@@ -128,11 +128,12 @@ func createTargetListHandler(targets []string, targetParameterName, defaultTarge
 	}
 }
 
-// WithAppsMeta injects _meta.ui into every tool when MCP Apps is enabled
+// WithAppsMeta injects _meta.ui into every tool when MCP Apps is enabled.
+// Each tool gets a unique resource URI so the viewer knows which tool to call.
 func WithAppsMeta() ToolMutator {
 	return func(tool api.ServerTool) api.ServerTool {
 		if tool.Tool.Meta == nil {
-			tool.Tool.Meta = mcpapps.ToolMeta()
+			tool.Tool.Meta = mcpapps.ToolMetaForTool(tool.Tool.Name)
 		}
 		return tool
 	}
