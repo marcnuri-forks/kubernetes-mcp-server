@@ -60,6 +60,10 @@ build-all-platforms: clean tidy format lint ## Build the project for all platfor
 test: ## Run the tests
 	go test -count=1 -v ./...
 
+.PHONY: test-browser
+test-browser: ## Run browser-based tests (requires Chromium, auto-downloaded by Rod on first run)
+	go test -count=1 -v -tags browser ./pkg/mcpapps/...
+
 .PHONY: test-update-snapshots
 test-update-snapshots: ## Update test snapshots for toolset tests
 	UPDATE_TOOLSETS_JSON=1 go test -count=1 -v ./pkg/mcp

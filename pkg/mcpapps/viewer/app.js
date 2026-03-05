@@ -13,6 +13,33 @@
   // Tool name injected by the server via ViewerHTMLForTool
   var embeddedToolName = window.__mcpToolName || '';
 
+  // Apply theme to documentElement so CSS light-dark() functions work.
+  function applyTheme(theme) {
+    if (!theme) return;
+    var root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    root.style.colorScheme = theme;
+  }
+
+  // Apply host-provided CSS custom properties from hostContext.styles.variables.
+  function applyStyleVariables(styles) {
+    if (!styles || !styles.variables) return;
+    var root = document.documentElement;
+    var vars = styles.variables;
+    for (var key in vars) {
+      if (vars.hasOwnProperty(key) && vars[key] != null) {
+        root.style.setProperty(key, vars[key]);
+      }
+    }
+  }
+
+  // Apply all host context styling (theme + variables)
+  function applyHostContext(hostContext) {
+    if (!hostContext) return;
+    applyTheme(hostContext.theme);
+    applyStyleVariables(hostContext.styles);
+  }
+
   function App() {
     var stateArr = useState('loading');
     var state = stateArr[0];
@@ -58,11 +85,18 @@
         }
       });
 
+      // Host sends theme/variable updates (spec-compliant hosts)
       protocol.onNotification('ui/notifications/host-context-changed', function(params) {
         console.log('[mcp-app] host-context-changed');
+        applyHostContext(params);
       });
 
       protocol.initialize().then(function(initResult) {
+        // Apply host theme and CSS variables
+        if (initResult && initResult.hostContext) {
+          applyHostContext(initResult.hostContext);
+        }
+
         // Prefer hostContext.toolInfo if available (spec-compliant hosts)
         var name = embeddedToolName;
         if (initResult && initResult.hostContext && initResult.hostContext.toolInfo && initResult.hostContext.toolInfo.tool) {
@@ -95,10 +129,14 @@
     }
 
     // Extract structured content or fall back to text.
-    // The server wraps array data in {"items": [...]} because the MCP spec
-    // requires structuredContent to be a JSON object. Unwrap it here.
+    // The server wraps plain array data in {"items": [...]} because the MCP spec
+    // requires structuredContent to be a JSON object. Unwrap it here, but only
+    // when the object is a plain items-wrapper (no other keys like columns/chart).
     var raw = result.structuredContent;
-    var structured = (raw && raw.items && Array.isArray(raw.items)) ? raw.items : raw;
+    var structured = raw;
+    if (raw && raw.items && Array.isArray(raw.items) && Object.keys(raw).length === 1) {
+      structured = raw.items;
+    }
     var textContent = '';
     if (result.content && Array.isArray(result.content)) {
       for (var i = 0; i < result.content.length; i++) {
@@ -108,8 +146,8 @@
       }
     }
 
-    // Route to the appropriate view based on tool name and data shape
-    if (structured && toolName === 'pods_top') {
+    // Route to the appropriate view based on data shape
+    if (structured && structured.chart && structured.columns && Array.isArray(structured.items)) {
       return html`<${components.MetricsTable} data=${structured} />`;
     }
 

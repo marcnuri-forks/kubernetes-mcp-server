@@ -23,6 +23,7 @@ status for adding MCP Apps support to kubernetes-mcp-server.
 - [11. Output Layer Refinement (Phase 3)](#11-output-layer-refinement-phase-3)
 - [12. Per-Tool Resource URIs and Dual-Flow Viewer (Phase 3)](#12-per-tool-resource-uris-and-dual-flow-viewer-phase-3)
 - [13. structuredContent Object Wrapping (Phase 3)](#13-structuredcontent-object-wrapping-phase-3)
+- [14. Frontend Browser Testing](#14-frontend-browser-testing)
 
 ---
 
@@ -172,22 +173,72 @@ This means Shadow DOM, `@scope`, `all: initial`, and other CSS isolation techniq
 
 ### Theming
 
-Hosts inject standardized CSS custom properties into the iframe for visual integration:
+**Status: Implemented.** The viewer applies host theme and CSS variables per the MCP Apps spec.
 
-- `--mcp-background`, `--mcp-foreground`, `--mcp-primary-background`, etc.
-- Extended set: `--color-background-*`, `--color-text-*`, `--color-border-*`
-- Font variables: `--font-sans`, `--font-mono`, `--font-text-*-size`
+#### How theming works (per spec)
 
-**Apps SHOULD use these with fallbacks** (implemented in `viewer/style.css`):
+The host does **not** inject CSS variables directly into the iframe's DOM. Instead:
+
+1. Host sends `hostContext.theme` (`"dark"` or `"light"`) and optionally
+   `hostContext.styles.variables` (a `Record<string, string>` of CSS custom properties)
+   via the `ui/initialize` response.
+2. The **view is responsible** for applying these — calling
+   `document.documentElement.style.colorScheme = theme` and iterating
+   `styles.variables` with `style.setProperty(key, value)`.
+3. Theme updates are communicated via `ui/notifications/host-context-changed`.
+
+This is implemented in `viewer/app.js` via `applyTheme()` and `applyStyleVariables()`,
+called from both the `initialize()` handler and the `host-context-changed` handler.
+
+#### CSS variable names (spec-defined)
+
+The spec defines ~65 CSS custom properties across these categories:
+
+- **Background**: `--color-background-primary`, `-secondary`, `-tertiary`, `-inverse`,
+  `-ghost`, `-info`, `-danger`, `-success`, `-warning`, `-disabled`
+- **Text**: `--color-text-primary`, `-secondary`, `-tertiary`, etc.
+- **Border**: `--color-border-primary`, `-secondary`, etc.
+- **Ring/Focus**: `--color-ring-primary`, `-secondary`, etc.
+- **Typography**: `--font-sans`, `--font-mono`, `--font-weight-*`, `--font-text-*-size`,
+  `--font-heading-*-size`, line heights
+- **Border radius**: `--border-radius-xs` through `-full`
+- **Shadows**: `--shadow-hairline`, `-sm`, `-md`, `-lg`
+
+Spacing is intentionally excluded (layouts break when spacing varies).
+
+#### Fallback strategy: `light-dark()` CSS function
+
+Since hosts may provide inconsistent variable subsets (or none at all — MCP Inspector
+only provides `theme`, not `styles.variables`), all CSS uses `var()` with `light-dark()`
+fallbacks:
+
 ```css
-.container {
-  background: var(--color-background-primary, #ffffff);
-  color: var(--color-text-primary, #1a1a1a);
+body {
+  background: var(--color-background-primary, light-dark(#ffffff, #1a1a1a));
+  color: var(--color-text-primary, light-dark(#1a1a2e, #e5e7eb));
 }
 ```
 
-**Theme changes** are communicated via `ui/notifications/host-context-changed` notification
-with a `theme` field (`"dark"` or `"light"`).
+The `light-dark()` CSS function selects the correct value based on the `color-scheme`
+property set by `applyTheme()`. This means:
+- If the host provides CSS variables → those are used
+- If not → `light-dark()` picks the right fallback based on the theme
+
+For Chart.js (which uses canvas, not CSS), colors are read from
+`document.documentElement.getAttribute('data-theme')` at chart creation time.
+
+#### Real-time theme switching
+
+Real-time theme changes on already-rendered content require the host to send
+`host-context-changed` notifications — this is the host's responsibility per the spec.
+CSS-only elements (tables, text, borders) update automatically via `light-dark()` when
+`color-scheme` changes. Canvas-based elements (Chart.js) are created with the correct
+theme at render time but don't live-update without a re-render.
+
+**MCP Inspector limitation**: The Inspector computes `hostContext` once with
+`useMemo([], [])` and does not send `host-context-changed` on theme toggle.
+This is a known limitation of the Inspector, not something the viewer can work around
+from inside a sandboxed iframe.
 
 The `prefersBorder` metadata allows apps to request border/background treatment from the host.
 
@@ -199,10 +250,11 @@ The `prefersBorder` metadata allows apps to request border/background treatment 
   ([ext-apps #467](https://github.com/modelcontextprotocol/ext-apps/issues/467))
 - `autoResize: true` causes layout bugs including infinite growth loops
   ([ext-apps #502](https://github.com/modelcontextprotocol/ext-apps/issues/502))
+- MCP Inspector does not send `host-context-changed` on theme toggle (computed once)
 
 ### Recommendation
 
-- Always provide CSS variable fallback values
+- Always provide CSS variable fallback values using `light-dark()` for theme awareness
 - Treat all host-provided variables as optional
 - Use `autoResize: false` + explicit height + manual `sendSizeChanged()` for predictable sizing
 - Set `prefersBorder` explicitly
@@ -517,12 +569,12 @@ the server can re-register tools with or without `_meta.ui` on the next `reloadT
 | Feature | Location | Status |
 |---------|----------|--------|
 | MCP postMessage protocol | `viewer/protocol.js` (~80 lines) | Done — exposes `window.mcpProtocol` |
-| Preact components | `viewer/components.js` (~150 lines) | Done — SortableTable, TableView, MetricsTable, GenericView |
+| Preact components | `viewer/components.js` (~150 lines) | Done — SortableTable, TableView, MetricsTable (data-driven), GenericView |
 | App root + routing | `viewer/app.js` (~80 lines) | Done — dual-flow: spec-compliant `tool-result` + fallback `tool-input` → `serverTools` |
 | CSS with theme fallbacks | `viewer/style.css` (~60 lines) | Done — includes `.chart-container` |
 | HTML shell + assembly | `viewer/viewer.html` (~38 lines) | Done — `INJECT_*` placeholders including `INJECT_TOOL_NAME` |
-| Chart.js bar chart | `viewer/components.js` — `MetricsTable` | Done — grouped CPU/Memory bars per pod |
-| `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` |
+| Chart.js bar chart | `viewer/components.js` — `MetricsTable` | Done — data-driven: reads columns, chart config, items from self-describing structured content |
+| `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` returns self-describing `map[string]any` with columns, chart, items |
 
 ### Completed — Phase 3: Output Layer + Per-Tool URIs + All List Tools
 
@@ -536,7 +588,7 @@ the server can re-register tools with or without `_meta.ui` on the next `reloadT
 | `tableToStructured` helper | `pkg/output/output.go` | Done — converts `metav1.Table` → `[]map[string]any` using column definitions |
 | `NewToolCallResultFull` constructor | `pkg/api/toolsets.go` | Done — `(text, structured, err)` for explicit text + structured |
 | `structuredContent` object wrapping | `pkg/mcp/mcp.go` — `ensureStructuredObject()` | Done — wraps slice/array in `{"items": [...]}` for MCP spec compliance |
-| Viewer unwraps `items` envelope | `viewer/app.js` | Done — extracts `structured.items` for array data |
+| Viewer unwraps `items` envelope | `viewer/app.js` | Done — extracts `structured.items` for plain wrappers only (preserves self-describing objects) |
 | `namespaces_list` structured content | `pkg/toolsets/core/namespaces.go` | Done — uses `PrintObjStructured` + `NewToolCallResultFull` |
 | `projects_list` structured content | `pkg/toolsets/core/namespaces.go` | Done — same pattern |
 | `pods_list` / `pods_list_in_namespace` structured content | `pkg/toolsets/core/pods.go` | Done — uses `PrintObjStructured`, removed `extractPodListStructured` |
@@ -547,6 +599,18 @@ the server can re-register tools with or without `_meta.ui` on the next `reloadT
 | Tests | `pkg/mcp/text_result_test.go` | Done — tests for array wrapping and map pass-through |
 | Tests | `pkg/output/output_test.go` | Done — tests for `PrintObjStructured` (YAML and Table), `tableToStructured` |
 | Tests | `pkg/api/toolsets_test.go` | Done — tests for `NewToolCallResultFull` |
+
+### Completed — Phase 3.5: Self-Describing Metrics Structured Content
+
+| Feature | Location | Status |
+|---------|----------|--------|
+| Self-describing `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` returns `map[string]any` with `columns`, `chart`, `items` |
+| Self-describing `nodes_top` structured content | `pkg/toolsets/core/nodes.go` | Done — `extractNodesTopStructured()` with CPU/memory values and percentage utilization |
+| Data-driven `MetricsTable` component | `viewer/components.js` | Done — reads columns, chart config, items from self-describing data; generic `parseUnit()` helper |
+| Shape-based routing (replaces tool-name routing) | `viewer/app.js` | Done — detects `structured.chart && structured.columns && Array.isArray(structured.items)` |
+| Selective `items` unwrapping | `viewer/app.js` | Done — only unwraps when `Object.keys(raw).length === 1` (plain wrapper) |
+| Tests | `pkg/mcp/pods_top_test.go` | Done — structured content assertions for columns, chart, items |
+| Tests | `pkg/mcp/nodes_top_test.go` | Done — structured content assertions for self-describing shape |
 
 ### Pending — Phase 4: Polish
 
@@ -705,8 +769,8 @@ The viewer supports two data flows to handle different MCP host behaviors:
 5. **Unwraps items envelope**: `structuredContent` is always a JSON object per spec.
    Arrays are wrapped in `{"items": [...]}` by the server. The viewer extracts
    `structured.items` when present.
-6. **Routes to component**: Switch on tool name and data shape:
-   - `pods_top` → `MetricsTable` (Chart.js bar chart + sortable table)
+6. **Routes to component**: Switch on data shape (no tool-name knowledge):
+   - Self-describing metrics (`chart` + `columns` + `items[]`) → `MetricsTable` (Chart.js bar chart + sortable table)
    - Any structured array → `TableView` (generic sortable table)
    - Other structured data → `GenericView` (formatted JSON)
    - Text fallback → `GenericView` (raw text)
@@ -779,7 +843,7 @@ return api.NewToolCallResult(text, textErr), nil
 | Text-only via custom formatting | events_list, helm_list | `NewToolCallResult(customFormat, nil)` |
 | Text-only hardcoded | pods_get, pods_delete, pods_log | `NewToolCallResult("message", nil)` |
 | Text + structured (manual) | pods_list, pods_list_in_namespace | `PrintObj` + `extractPodListStructured` + literal struct |
-| Custom text + structured (manual) | pods_top | `TopCmdPrinter` + `extractPodsTopStructured` + literal struct |
+| Custom text + self-describing structured | pods_top, nodes_top | `TopCmdPrinter` + `extractPodsTopStructured`/`extractNodesTopStructured` → `map[string]any` with columns, chart, items |
 
 ### Implemented changes
 
@@ -946,7 +1010,7 @@ doesn't need to know the resource type — it just renders whatever columns the 
 
 This means:
 - `TableView` is a **generic Kubernetes list table** (auto-discovers columns from data)
-- `MetricsTable` (pods_top) stays tool-specific (metrics API, not a standard K8s Table)
+- `MetricsTable` is data-driven (reads columns/chart/items from self-describing structured content, no tool-specific knowledge)
 - `GenericView` remains as fallback for non-table data
 
 ### Files modified
@@ -1078,3 +1142,153 @@ var structured = (raw && raw.items && Array.isArray(raw.items)) ? raw.items : ra
 | `pkg/mcp/mcp.go` | Added `ensureStructuredObject()`, called from `NewStructuredResult()` |
 | `pkg/mcp/text_result_test.go` | Tests for array wrapping and map pass-through |
 | `pkg/mcpapps/viewer/app.js` | Unwraps `{"items": [...]}` envelope |
+
+---
+
+## 14. Frontend Browser Testing
+
+Browser tests are **foundational infrastructure** — the test harness and first tests should be
+set up alongside the initial viewer implementation, not deferred to a later phase. Each feature
+(table rendering, metrics charts, theming, sorting) gets its browser tests written as part of
+the same phase that implements the feature.
+
+### Why Browser Tests Are Needed
+
+The MCP Apps viewer is a Preact-based SPA served as a self-contained HTML blob (~220KB with
+vendored JS). It communicates with its parent frame via **postMessage JSON-RPC**, not HTTP.
+Go unit tests (`mcpapps_test.go`) can verify HTML assembly and resource URIs, but they cannot
+test rendering, component routing, user interactions, or the postMessage protocol flow. Only
+a real browser can validate that the viewer works end-to-end.
+
+### Library Choice: Rod (go-rod/rod)
+
+| | |
+|---|---|
+| **Repository** | [github.com/go-rod/rod](https://github.com/go-rod/rod) |
+| **Stars** | ~6,700+ |
+| **Actively maintained** | Yes (Feb 2026) |
+| **Pure Go** | Yes (no Node.js, no Java) |
+| **Browser** | Auto-downloads pinned Chromium version |
+
+**Why Rod:**
+
+1. **Auto-downloads the exact Chromium version** — no CI setup, no version mismatch.
+   Each Rod release pins a specific Chromium + DevTools protocol version.
+2. **Auto-wait on all interactions** — ideal for Preact async rendering + Chart.js canvas.
+3. **Thread-safe** — works with Go test parallelism.
+4. **`Must` prefix convention** maps naturally to test code (panics on error).
+5. **First-class iframe support** — critical since MCP Apps run inside sandboxed iframes.
+6. **Zero transitive Go dependencies** — only adds `github.com/go-rod/rod` to `go.mod`.
+7. **CI-friendly** — headless by default, works on `ubuntu-latest` GitHub Actions out of the box.
+
+```go
+browser := rod.New().MustConnect()
+page := browser.MustPage("file:///tmp/test-harness.html").MustWaitStable()
+iframe := page.MustElement("iframe").MustFrame()
+rows := iframe.MustElements("table tbody tr")
+```
+
+**Safe alternative: [chromedp](https://github.com/chromedp/chromedp)** (~11,500 stars) —
+most popular Go browser library, battle-tested, pure Go with zero dependencies. Trade-offs:
+more verbose DSL-like API, no auto-wait (manual `chromedp.WaitVisible` required), requires
+system Chrome or Docker image (no auto-download).
+
+### Test Architecture: Wrapper Page with iframe
+
+The viewer communicates via `window.parent.postMessage()` JSON-RPC. In production, the parent
+is the MCP host (Claude Desktop, VS Code, etc.). In tests, we **simulate the MCP host** using
+a wrapper HTML page that embeds the viewer in an `<iframe>` and handles the protocol.
+
+A direct page load approach was considered (when there's no iframe, `window.parent === window`)
+but rejected: the app initializes immediately on load, firing `ui/initialize` before a test
+listener can be injected, creating a fragile race condition.
+
+The wrapper iframe approach is better because:
+- It replicates the actual iframe + postMessage flow as MCP hosts do it.
+- No modifications to the production viewer HTML — used as-is via `srcdoc`.
+- Go generates the harness HTML from a template — no extra files checked in.
+- The `srcdoc` attribute avoids cross-origin issues (same-origin with parent).
+
+#### Harness HTML (generated by Go test)
+
+```html
+<html><body>
+<iframe id="viewer" srcdoc="...escaped viewer HTML..."></iframe>
+<script>
+// Act as MCP host: respond to ui/initialize
+window.addEventListener('message', function(e) {
+    var msg = e.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    if (msg.method === 'ui/initialize' && msg.id != null) {
+        e.source.postMessage({
+            jsonrpc: '2.0', id: msg.id,
+            result: {
+                hostContext: {
+                    theme: window.__testTheme || 'light',
+                    toolInfo: { tool: { name: window.__testToolName || 'test_tool' } }
+                }
+            }
+        }, '*');
+    }
+});
+// Expose function for Go test to inject tool results
+window.sendToolResult = function(data) {
+    document.getElementById('viewer').contentWindow.postMessage({
+        jsonrpc: '2.0',
+        method: 'ui/notifications/tool-result',
+        params: data
+    }, '*');
+};
+</script>
+</body></html>
+```
+
+#### Test Flow
+
+```
+1. Go test calls mcpapps.ViewerHTMLForTool("pods_list")
+2. Go test generates harness HTML with viewer embedded in <iframe srcdoc="...">
+3. Harness written to temp file
+4. Rod opens file:///tmp/harness-XXXX.html
+5. Harness JS responds to ui/initialize from viewer
+6. Viewer transitions to "ready" state ("Waiting for tool result...")
+7. Go test calls page.MustEval("window.sendToolResult({...})")
+8. Viewer renders the data (table, chart, generic view)
+9. Go test navigates into iframe DOM and asserts on rendered elements
+```
+
+### What to Test (incrementally, alongside each feature)
+
+| Test Category | Phase |
+|---|---|
+| **Protocol handshake**: viewer initializes, transitions from "loading" to "ready" | Infrastructure setup |
+| **Table rendering**: correct columns, row count, data values match input | Table component |
+| **Table sorting**: click header → rows reorder, click again → reverse | Table component |
+| **Metrics/Charts**: canvas element present, MetricsTable renders chart + table | Metrics component |
+| **Data routing**: `{items:[...]}` → TableView, `{chart,columns,items}` → MetricsTable, text → GenericView | App routing |
+| **Items unwrapping**: `{"items": [...]}` envelope unwrapped for plain arrays | structuredContent |
+| **Theme application**: `data-theme` attribute set, `colorScheme` style matches | Theming |
+| **Host context changes**: `host-context-changed` notification updates theme live | Theming |
+| **Error handling**: error state renders error message in `.status` element | Error paths |
+
+### CI Considerations
+
+- **Build tag**: Use `//go:build browser` to separate browser tests from unit tests.
+  Browser tests are slower (launch Chromium) and should run in a dedicated CI step.
+- **Rod auto-downloads Chromium**: No extra CI setup. Works on `ubuntu-latest`.
+- **Timeouts**: Set reasonable timeouts (10–15s) for async rendering waits.
+- **Viewport**: Use `rod.New().NoDefaultDevice()` for consistent viewport sizing.
+- **Makefile target**: Add `make test-browser` that runs `go test -tags browser ./pkg/mcpapps/...`.
+- **First run**: Rod downloads Chromium on first invocation (~150MB). Cache in CI via
+  `~/.cache/rod` or equivalent.
+
+### Impact on go.mod
+
+```
+github.com/go-rod/rod v0.116.x  (zero transitive Go dependencies)
+```
+
+### Decision
+
+**Rod + Wrapper iframe approach**. Test harness infrastructure set up in Phase 1 alongside
+the initial viewer. Tests added incrementally as each frontend feature is implemented.

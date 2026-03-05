@@ -471,11 +471,11 @@ func podsRun(params api.ToolHandlerParams) (*api.ToolCallResult, error) {
 	return api.NewToolCallResult("# The following resources (YAML) have been created or updated successfully\n"+marshalledYaml, err), nil
 }
 
-func extractPodsTopStructured(podMetrics *metrics.PodMetricsList) []map[string]any {
+func extractPodsTopStructured(podMetrics *metrics.PodMetricsList) map[string]any {
 	if podMetrics == nil || len(podMetrics.Items) == 0 {
 		return nil
 	}
-	result := make([]map[string]any, 0, len(podMetrics.Items))
+	items := make([]map[string]any, 0, len(podMetrics.Items))
 	for _, pm := range podMetrics.Items {
 		var cpuTotal, memTotal int64
 		for _, c := range pm.Containers {
@@ -486,12 +486,27 @@ func extractPodsTopStructured(podMetrics *metrics.PodMetricsList) []map[string]a
 				memTotal += mem.Value()
 			}
 		}
-		result = append(result, map[string]any{
+		items = append(items, map[string]any{
 			"name":      pm.Name,
 			"namespace": pm.Namespace,
 			"cpu":       fmt.Sprintf("%dm", cpuTotal),
 			"memory":    fmt.Sprintf("%dMi", memTotal/(1024*1024)),
 		})
 	}
-	return result
+	return map[string]any{
+		"columns": []map[string]string{
+			{"key": "namespace", "label": "Namespace"},
+			{"key": "name", "label": "Pod"},
+			{"key": "cpu", "label": "CPU"},
+			{"key": "memory", "label": "Memory"},
+		},
+		"chart": map[string]any{
+			"labelKey": "name",
+			"datasets": []map[string]string{
+				{"key": "cpu", "label": "CPU (millicores)", "unit": "cpu", "axis": "left"},
+				{"key": "memory", "label": "Memory (MiB)", "unit": "memory", "axis": "right"},
+			},
+		},
+		"items": items,
+	}
 }

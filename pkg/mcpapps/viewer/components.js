@@ -85,14 +85,40 @@
     return html`<${SortableTable} data=${data} columns=${columns} />`;
   }
 
-  // MetricsTable: for pods_top structured content with Chart.js bar chart
+  // Parse a metric value string into a numeric value based on its unit type.
+  function parseUnit(value, unit) {
+    var raw = String(value || '0');
+    if (unit === 'cpu') {
+      if (raw.endsWith('m')) return parseFloat(raw);
+      if (raw.endsWith('n')) return parseFloat(raw) / 1e6;
+      return parseFloat(raw) * 1000;
+    }
+    if (unit === 'memory') {
+      if (raw.endsWith('Mi')) return parseFloat(raw);
+      if (raw.endsWith('Ki')) return parseFloat(raw) / 1024;
+      if (raw.endsWith('Gi')) return parseFloat(raw) * 1024;
+      return parseFloat(raw) / (1024 * 1024);
+    }
+    return parseFloat(raw) || 0;
+  }
+
+  // Dataset colors used for chart rendering (cycled when more than 2 datasets)
+  var datasetColors = [
+    { bg: 'rgba(59, 130, 246, 0.7)', border: 'rgba(59, 130, 246, 1)' },
+    { bg: 'rgba(16, 185, 129, 0.7)', border: 'rgba(16, 185, 129, 1)' }
+  ];
+
+  // MetricsTable: data-driven metrics chart + table from self-describing structured content
   function MetricsTable(props) {
     var data = props.data;
+    var items = data.items;
+    var columns = data.columns;
+    var chartCfg = data.chart;
     var canvasRef = useRef(null);
     var chartRef = useRef(null);
 
     useEffect(function() {
-      if (!Array.isArray(data) || data.length === 0 || !canvasRef.current || typeof Chart === 'undefined') return;
+      if (!items || items.length === 0 || !canvasRef.current || typeof Chart === 'undefined' || !chartCfg) return;
 
       // Destroy previous chart instance
       if (chartRef.current) {
@@ -100,66 +126,62 @@
         chartRef.current = null;
       }
 
-      // Parse CPU (millicores) and Memory (MiB) values
-      var labels = data.map(function(d) { return d.name || ''; });
-      var cpuValues = data.map(function(d) {
-        var raw = String(d.cpu || '0');
-        if (raw.endsWith('m')) return parseFloat(raw);
-        if (raw.endsWith('n')) return parseFloat(raw) / 1e6;
-        return parseFloat(raw) * 1000;
+      var labelKey = chartCfg.labelKey || 'name';
+      var labels = items.map(function(d) { return d[labelKey] || ''; });
+      var datasets = chartCfg.datasets.map(function(ds, i) {
+        var color = datasetColors[i % datasetColors.length];
+        return {
+          label: ds.label,
+          data: items.map(function(d) { return parseUnit(d[ds.key], ds.unit); }),
+          backgroundColor: color.bg,
+          borderColor: color.border,
+          borderWidth: 1,
+          yAxisID: ds.axis === 'right' ? 'y1' : 'y'
+        };
       });
-      var memValues = data.map(function(d) {
-        var raw = String(d.memory || '0');
-        if (raw.endsWith('Mi')) return parseFloat(raw);
-        if (raw.endsWith('Ki')) return parseFloat(raw) / 1024;
-        if (raw.endsWith('Gi')) return parseFloat(raw) * 1024;
-        return parseFloat(raw) / (1024 * 1024);
+
+      // Detect dark mode from the document's color-scheme (set by applyTheme in app.js)
+      var isDark = document.documentElement.style.colorScheme === 'dark' ||
+        document.documentElement.getAttribute('data-theme') === 'dark';
+      var textColor = isDark ? '#e5e7eb' : '#374151';
+      var gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+
+      // Build scales from dataset axis/label descriptors
+      var scales = {
+        x: { ticks: { color: textColor }, grid: { color: gridColor } }
+      };
+      var hasLeft = false, hasRight = false;
+      chartCfg.datasets.forEach(function(ds) {
+        if (ds.axis === 'right' && !hasRight) {
+          hasRight = true;
+          scales.y1 = {
+            type: 'linear', position: 'right',
+            title: { display: true, text: ds.label, color: textColor },
+            beginAtZero: true, ticks: { color: textColor },
+            grid: { drawOnChartArea: false }
+          };
+        } else if (!hasLeft) {
+          hasLeft = true;
+          scales.y = {
+            type: 'linear', position: 'left',
+            title: { display: true, text: ds.label, color: textColor },
+            beginAtZero: true, ticks: { color: textColor },
+            grid: { color: gridColor }
+          };
+        }
       });
 
       chartRef.current = new Chart(canvasRef.current, {
         type: 'bar',
-        data: {
-          labels: labels,
-          datasets: [
-            {
-              label: 'CPU (millicores)',
-              data: cpuValues,
-              backgroundColor: 'rgba(59, 130, 246, 0.7)',
-              borderColor: 'rgba(59, 130, 246, 1)',
-              borderWidth: 1,
-              yAxisID: 'y'
-            },
-            {
-              label: 'Memory (MiB)',
-              data: memValues,
-              backgroundColor: 'rgba(16, 185, 129, 0.7)',
-              borderColor: 'rgba(16, 185, 129, 1)',
-              borderWidth: 1,
-              yAxisID: 'y1'
-            }
-          ]
-        },
+        data: { labels: labels, datasets: datasets },
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          color: textColor,
           plugins: {
-            legend: { position: 'top' }
+            legend: { position: 'top', labels: { color: textColor } }
           },
-          scales: {
-            y: {
-              type: 'linear',
-              position: 'left',
-              title: { display: true, text: 'CPU (millicores)' },
-              beginAtZero: true
-            },
-            y1: {
-              type: 'linear',
-              position: 'right',
-              title: { display: true, text: 'Memory (MiB)' },
-              beginAtZero: true,
-              grid: { drawOnChartArea: false }
-            }
-          }
+          scales: scales
         }
       });
 
@@ -171,20 +193,14 @@
       };
     }, [data]);
 
-    if (!Array.isArray(data) || data.length === 0) {
+    if (!items || items.length === 0) {
       return html`<p class="status">No metrics data</p>`;
     }
-    var columns = [
-      { key: 'namespace', label: 'Namespace' },
-      { key: 'name', label: 'Pod' },
-      { key: 'cpu', label: 'CPU' },
-      { key: 'memory', label: 'Memory' },
-    ];
     return html`
       <div class="chart-container">
         <canvas ref=${canvasRef} height="250"></canvas>
       </div>
-      <${SortableTable} data=${data} columns=${columns} />
+      <${SortableTable} data=${items} columns=${columns} />
     `;
   }
 
