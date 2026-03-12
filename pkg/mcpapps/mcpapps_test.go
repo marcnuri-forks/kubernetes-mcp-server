@@ -114,6 +114,15 @@ func (s *McpAppsSuite) TestToolMetaForTool() {
 		s.Require().True(ok)
 		s.Equal("ui://kubernetes-mcp-server/tool/pods_list", ui["resourceUri"])
 	})
+	s.Run("contains legacy flat ui/resourceUri key", func() {
+		meta := ToolMetaForTool("pods_list")
+		s.Equal("ui://kubernetes-mcp-server/tool/pods_list", meta["ui/resourceUri"])
+	})
+	s.Run("nested and legacy keys have same URI", func() {
+		meta := ToolMetaForTool("pods_list")
+		ui := meta["ui"].(map[string]any)
+		s.Equal(ui["resourceUri"], meta["ui/resourceUri"])
+	})
 	s.Run("different tools get different URIs", func() {
 		meta1 := ToolMetaForTool("pods_list")
 		meta2 := ToolMetaForTool("namespaces_list")

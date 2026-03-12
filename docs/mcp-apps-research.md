@@ -6,7 +6,7 @@ status for adding MCP Apps support to kubernetes-mcp-server.
 **Issue**: [containers/kubernetes-mcp-server#753](https://github.com/containers/kubernetes-mcp-server/issues/753)
 **Branch**: `feat/mcp-apps`
 **Date**: 2026-03-05
-**Status**: Phase 1, Phase 2, and Phase 3 complete. Per-tool resource URIs, output layer refinement, structuredContent object wrapping, and dual-flow viewer all implemented and verified working with MCP Inspector.
+**Status**: Phase 1, Phase 2, and Phase 3 complete. Per-tool resource URIs, output layer refinement, structuredContent object wrapping, and dual-flow viewer all implemented and verified working with MCP Inspector and VS Code.
 
 ## Table of Contents
 
@@ -24,6 +24,7 @@ status for adding MCP Apps support to kubernetes-mcp-server.
 - [12. Per-Tool Resource URIs and Dual-Flow Viewer (Phase 3)](#12-per-tool-resource-uris-and-dual-flow-viewer-phase-3)
 - [13. structuredContent Object Wrapping (Phase 3)](#13-structuredcontent-object-wrapping-phase-3)
 - [14. Frontend Browser Testing](#14-frontend-browser-testing)
+- [15. VS Code Compatibility: Resource Registration Ordering](#15-vs-code-compatibility-resource-registration-ordering)
 
 ---
 
@@ -1292,3 +1293,101 @@ github.com/go-rod/rod v0.116.x  (zero transitive Go dependencies)
 
 **Rod + Wrapper iframe approach**. Test harness infrastructure set up in Phase 1 alongside
 the initial viewer. Tests added incrementally as each frontend feature is implemented.
+
+---
+
+## 15. VS Code Compatibility: Resource Registration Ordering
+
+**Status: Resolved.** MCP Apps worked in MCP Inspector but failed in VS Code with
+`Error loading MCP App: MPC -32002: Resource not found`. Root cause was a race condition
+between tool registration and resource registration.
+
+### Problem
+
+VS Code failed to load MCP App resources with error code `-32002` (Resource not found),
+while the same server worked correctly with MCP Inspector.
+
+### Root Cause: Race Condition in `reloadToolsets()`
+
+The go-sdk's `AddTool()` calls `changeAndNotify()` which sends a `notifications/tools/list_changed`
+notification to connected clients **immediately** after each tool is added. The original
+`reloadToolsets()` flow was:
+
+```
+1. Register tools (each AddTool → sends tools/list_changed to VS Code)
+2. Register resources AFTER all tools
+```
+
+VS Code eagerly pre-fetches MCP App resources: when it receives `tools/list_changed`, it calls
+`tools/list`, reads `_meta.ui.resourceUri` from each tool, and immediately calls `resources/read`
+to pre-load the UI HTML. Because resources were registered AFTER tools, VS Code's `resources/read`
+request arrived before the resource existed, producing `-32002`.
+
+MCP Inspector does not pre-fetch resources this way — it only loads them on demand when the user
+opens the "Apps" tab, by which time the resources are already registered.
+
+### How VS Code Discovers MCP App Resources
+
+Investigation of the [VS Code source code](https://github.com/microsoft/vscode/blob/5b38f1d5296b42ae51049d452362b673ff714dbe/src/vs/platform/mcp/common/modelContextProtocolApps.ts)
+revealed the complete flow:
+
+1. **`mcpServer.ts::_normalizeTool()`** — reads `_meta.ui.resourceUri` (nested key) from the
+   tool definition and stores it on the tool object.
+2. **`mcpLanguageModelToolContribution.ts::prepareToolInvocation()`** — passes the URI unchanged
+   into `IMcpToolCallUIData`.
+3. **`mcpToolCallUI.ts::loadResource()`** — calls `resources/read` with the URI **verbatim**
+   (no transformation, encoding, or normalization).
+4. **`mcpServerRequestHandler.ts`** — sends the `resources/read` MCP protocol request.
+
+Key detail: VS Code reads the **nested** `_meta.ui.resourceUri` key, not the legacy flat
+`_meta["ui/resourceUri"]` key.
+
+### Solution
+
+Moved resource registration to run **before** tool registration in `reloadToolsets()`:
+
+```go
+// Build tool name list from applicable tools
+newToolNames := make([]string, 0, len(applicableTools))
+for _, t := range applicableTools {
+    newToolNames = append(newToolNames, t.Tool.Name)
+}
+
+// Register resources BEFORE tools so they're available when clients
+// receive tools/list_changed and immediately try resources/read
+if s.configuration.AppsEnabled {
+    s.registerMCPAppResources(newToolNames)
+}
+
+// Now register tools (each AddTool sends tools/list_changed)
+newTools, err := reloadItems(previousTools, applicableTools, ...)
+```
+
+This ensures resources exist before any `tools/list_changed` notification is sent.
+
+### Legacy `_meta` Key
+
+Additionally, `ToolMetaForTool()` was updated to set both metadata formats for backward
+compatibility, matching what the ext-apps SDK's `registerAppTool()` does:
+
+```go
+return map[string]any{
+    "ui":             map[string]any{"resourceUri": uri},  // nested (VS Code reads this)
+    "ui/resourceUri": uri,                                  // flat legacy key
+}
+```
+
+### Key Takeaway
+
+When an MCP server registers tools with `_meta.ui.resourceUri`, the corresponding resources
+**must** be registered before the tools. The go-sdk sends `tools/list_changed` notifications
+synchronously within `AddTool()`, and eager clients like VS Code will immediately try to read
+the referenced resources.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `pkg/mcp/mcp.go` | Moved `registerMCPAppResources()` before `reloadItems` for tools |
+| `pkg/mcpapps/mcpapps.go` | Added legacy flat `"ui/resourceUri"` key to `ToolMetaForTool()` |
+| `pkg/mcpapps/mcpapps_test.go` | Tests for both nested and legacy `_meta` keys |

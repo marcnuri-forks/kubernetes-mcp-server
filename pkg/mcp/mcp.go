@@ -150,6 +150,19 @@ func (s *Server) reloadToolsets() error {
 	previousPrompts := s.enabledPrompts
 	s.mu.RUnlock()
 
+	// Build the new tool name list for resource registration
+	newToolNames := make([]string, 0, len(applicableTools))
+	for _, t := range applicableTools {
+		newToolNames = append(newToolNames, t.Tool.Name)
+	}
+
+	// Register per-tool MCP App resources BEFORE tools so that resources are
+	// available when clients receive the tools/list_changed notification and
+	// immediately try to read the resource URI from _meta.ui.resourceUri.
+	if s.configuration.AppsEnabled {
+		s.registerMCPAppResources(newToolNames)
+	}
+
 	// Reload tools (calls s.server.AddTool/RemoveTools - external code, no lock held)
 	newTools, err := reloadItems(
 		previousTools,
@@ -172,11 +185,6 @@ func (s *Server) reloadToolsets() error {
 	)
 	if err != nil {
 		return err
-	}
-
-	// Register per-tool MCP App resources when apps are enabled
-	if s.configuration.AppsEnabled {
-		s.registerMCPAppResources(newTools)
 	}
 
 	// Only hold write lock for the final assignment

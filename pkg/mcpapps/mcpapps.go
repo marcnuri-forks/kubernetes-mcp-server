@@ -59,8 +59,12 @@ func ToolResourceURI(toolName string) string {
 }
 
 // ToolMetaForTool returns the _meta map for a specific tool, pointing to its per-tool resource URI.
+// It sets both the nested "ui.resourceUri" key and the legacy flat "ui/resourceUri" key
+// for backward compatibility with MCP hosts that read the flat key (e.g. VS Code).
 func ToolMetaForTool(toolName string) map[string]any {
+	uri := ToolResourceURI(toolName)
 	return map[string]any{
-		"ui": map[string]any{"resourceUri": ToolResourceURI(toolName)},
+		"ui":             map[string]any{"resourceUri": uri},
+		"ui/resourceUri": uri,
 	}
 }
