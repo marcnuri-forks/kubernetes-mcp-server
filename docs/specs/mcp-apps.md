@@ -1,30 +1,24 @@
-# MCP Apps Integration Research — Issue #753
+# MCP Apps
 
-This document captures all research findings, architectural decisions, and implementation
-status for adding MCP Apps support to kubernetes-mcp-server.
+MCP Apps enables tools to return interactive HTML-based UIs rendered in sandboxed iframes by MCP hosts. This document describes the architecture, design decisions, and configuration for the MCP Apps integration.
 
 **Issue**: [containers/kubernetes-mcp-server#753](https://github.com/containers/kubernetes-mcp-server/issues/753)
-**Branch**: `feat/mcp-apps`
-**Date**: 2026-03-05
-**Status**: Phase 1, Phase 2, and Phase 3 complete. Per-tool resource URIs, output layer refinement, structuredContent object wrapping, and dual-flow viewer all implemented and verified working with MCP Inspector and VS Code.
 
 ## Table of Contents
 
 - [1. What Are MCP Apps](#1-what-are-mcp-apps)
 - [2. Go-SDK Support](#2-go-sdk-support)
-- [3. PoC Reference (openshift-mcp-server PR #143)](#3-poc-reference-openshift-mcp-server-pr-143)
-- [4. Styling and CSS Isolation](#4-styling-and-css-isolation)
-- [5. Multiple Widgets and Tool Call Accumulation](#5-multiple-widgets-and-tool-call-accumulation)
-- [6. Frontend Stack Decision](#6-frontend-stack-decision)
-- [7. MCP postMessage Protocol](#7-mcp-postmessage-protocol)
-- [8. Configuration: Opt-In Feature](#8-configuration-opt-in-feature)
-- [9. Implementation Status](#9-implementation-status)
-- [10. Architecture](#10-architecture)
-- [11. Output Layer Refinement (Phase 3)](#11-output-layer-refinement-phase-3)
-- [12. Per-Tool Resource URIs and Dual-Flow Viewer (Phase 3)](#12-per-tool-resource-uris-and-dual-flow-viewer-phase-3)
-- [13. structuredContent Object Wrapping (Phase 3)](#13-structuredcontent-object-wrapping-phase-3)
-- [14. Frontend Browser Testing](#14-frontend-browser-testing)
-- [15. VS Code Compatibility: Resource Registration Ordering](#15-vs-code-compatibility-resource-registration-ordering)
+- [3. Styling and CSS Isolation](#3-styling-and-css-isolation)
+- [4. Multiple Widgets and Tool Call Accumulation](#4-multiple-widgets-and-tool-call-accumulation)
+- [5. Frontend Stack Decision](#5-frontend-stack-decision)
+- [6. MCP postMessage Protocol](#6-mcp-postmessage-protocol)
+- [7. Configuration: Opt-In Feature](#7-configuration-opt-in-feature)
+- [8. Architecture](#8-architecture)
+- [9. Output Layer](#9-output-layer)
+- [10. Per-Tool Resource URIs and Dual-Flow Viewer](#10-per-tool-resource-uris-and-dual-flow-viewer)
+- [11. structuredContent Object Wrapping](#11-structuredcontent-object-wrapping)
+- [12. Known Compatibility Notes](#12-known-compatibility-notes)
+- [Appendix A: Research and Development Journal](#appendix-a-research-and-development-journal)
 
 ---
 
@@ -53,12 +47,10 @@ Key specification sources:
 
 ## 2. Go-SDK Support
 
-### PR #794 (merged 2026-02-17, included in v1.4.0)
+The go-sdk (v1.4.0) added an `Extensions` field to both `ServerCapabilities` and
+`ClientCapabilities` per SEP-2133.
 
-[PR](https://github.com/modelcontextprotocol/go-sdk/pull/794) added `Extensions` field
-to both `ServerCapabilities` and `ClientCapabilities` per SEP-2133.
-
-New API surface available in our go-sdk v1.4.0 dependency:
+API surface:
 
 ```go
 // On ServerCapabilities
@@ -99,65 +91,12 @@ an object, not null).
 }
 ```
 
-In Go (`pkg/mcp/mcp.go` — implemented):
+In Go (`pkg/mcp/mcp.go`):
 ```go
 caps.AddExtension("io.modelcontextprotocol/ui", nil)
 ```
 
-## 3. PoC Reference (openshift-mcp-server PR #143)
-
-[PR #143](https://github.com/openshift/openshift-mcp-server/pull/143) is a rough PoC
-implementing a Pods Top dashboard with MCP Apps.
-
-### What it does
-
-- Adds a `mcp-app/` directory with a Vite + TypeScript frontend build
-- Uses `vite-plugin-singlefile` to produce a single HTML with all JS/CSS inlined
-- Bundles the HTML into Go binary via `//go:embed`
-- Uses `@modelcontextprotocol/ext-apps` SDK (v1.0.0) for host communication
-- Implements column sorting, refresh via `app.callServerTool()`, dark/light theme support
-
-### Architecture (3 layers)
-
-1. **Go embed package** (`mcp-app/mcpapp.go`):
-   - `//go:embed dist/pods-top-app.html`
-   - `Resources()` returns a registry of all app resources
-   - `ToolMeta(resourceURI)` helper generates `_meta` map
-   - MIME type: `text/html;profile=mcp-app`
-   - Resource URI: `ui://kubernetes-mcp-server/pods-top.html`
-
-2. **MCP resource registration** (`pkg/mcp/mcp.go`):
-   - Iterates `mcpapp.Resources()` and registers each as an MCP resource
-   - Enables `Resources` capability (was `nil` before)
-
-3. **Tool linkage** (`pkg/toolsets/core/pods.go`):
-   - `pods_top` tool gets `Meta: mcpapp.ToolMeta(mcpapp.PodsTopResourceURI)`
-   - Tool handler returns both text and `structuredContent`
-
-### Concerns noted
-
-- **Build step required**: `npm install && vite build` as dependency of `make build`
-- **Committed build artifacts**: `dist/pods-top-app.html` in git (should be .gitignored)
-- **innerHTML without sanitization**: XSS risk if pod names contain HTML-special characters
-- **SDK size**: `@modelcontextprotocol/ext-apps` is 314 KB (mostly Zod validation)
-- **Tight Go/TypeScript coupling**: Matching struct/interface with no shared schema
-
-### Patterns reused in our implementation
-
-- `//go:embed` for bundling HTML into Go binary
-- `ToolMeta()` helper for consistent `_meta` structure
-- Dual content return (text + structured) for backward compatibility
-- Theme support via CSS custom property fallbacks
-
-### Patterns intentionally avoided
-
-- **No build step**: We inline JS directly, no Vite/npm required
-- **No ext-apps SDK**: Custom ~80-line protocol implementation instead of 314 KB SDK
-- **Per-tool resource URIs** (not per-tool HTML files): Single generic viewer template,
-  but each tool gets its own `ui://` resource URI with the tool name injected into the HTML
-  via `window.__mcpToolName`. This enables the dual-flow viewer (see [Section 12](#12-per-tool-resource-uris-and-dual-flow-viewer-phase-3)).
-
-## 4. Styling and CSS Isolation
+## 3. Styling and CSS Isolation
 
 ### Spec guarantees
 
@@ -174,7 +113,7 @@ This means Shadow DOM, `@scope`, `all: initial`, and other CSS isolation techniq
 
 ### Theming
 
-**Status: Implemented.** The viewer applies host theme and CSS variables per the MCP Apps spec.
+The viewer applies host theme and CSS variables per the MCP Apps spec.
 
 #### How theming works (per spec)
 
@@ -277,7 +216,7 @@ This means:
 - No external network requests (`connect-src 'none'`)
 - No CDN imports possible without declaring them in `_meta.ui.csp`
 
-## 5. Multiple Widgets and Tool Call Accumulation
+## 4. Multiple Widgets and Tool Call Accumulation
 
 ### Spec behavior
 
@@ -326,7 +265,7 @@ Apps can request different display modes:
 - **`panel`** — side panel
 - **`pip`** — picture-in-picture overlay
 
-## 6. Frontend Stack Decision
+## 5. Frontend Stack Decision
 
 ### Decision: Preact + HTM + Chart.js (no build step)
 
@@ -359,12 +298,6 @@ MCP Apps communicate via postMessage/JSON-RPC through the host. Fundamental arch
 - Metrics data (`pods_top`) benefits from visual bar charts for CPU and memory
 - UMD build works in IIFE context without module system
 - Responsive and theme-friendly (integrates with CSS variables)
-
-**Why signals-core was removed:**
-- Originally vendored (`@preact/signals-core@1.8.0`, ~4 KB) but **never used**
-- The viewer exclusively uses Preact hooks (`useState`, `useEffect`, `useRef`, etc.)
-- Its ESM `export{...}` statement caused a SyntaxError inside the IIFE wrapper
-- Removed in Phase 2 restructuring
 
 ### Single-file constraint
 
@@ -404,7 +337,7 @@ vendor-js:
 		-o $(MCP_APPS_VENDOR_DIR)/chart.umd.min.js
 ```
 
-## 7. MCP postMessage Protocol
+## 6. MCP postMessage Protocol
 
 ### Protocol overview
 
@@ -455,10 +388,9 @@ const { hostContext } = await initialize();
 // hostContext.styleVariables → CSS custom properties from host
 ```
 
-## 8. Configuration: Opt-In Feature
+## 7. Configuration: Opt-In Feature
 
 MCP Apps is an **opt-in feature** controlled by configuration, disabled by default.
-**Status: Fully implemented.**
 
 ### Configuration flag
 
@@ -551,91 +483,7 @@ the server can re-register tools with or without `_meta.ui` on the next `reloadT
 - **`stateless = true`**: Compatible — MCP Apps uses Resources (static), not tool
   list change notifications
 
-## 9. Implementation Status
-
-### Completed — Phase 1: Infrastructure + Configuration
-
-| Feature | Location | Status |
-|---------|----------|--------|
-| `AppsEnabled bool` config field | `pkg/config/config.go` | Done |
-| `IsAppsEnabled()` getter | `pkg/config/config.go` | Done |
-| `--apps` CLI flag | `pkg/kubernetes-mcp-server/cmd/root.go` | Done |
-| Extension registration | `pkg/mcp/mcp.go` | Done — `caps.AddExtension("io.modelcontextprotocol/ui", nil)` |
-| Resources capability | `pkg/mcp/mcp.go` | Done — `caps.Resources = &mcp.ResourceCapabilities{}` |
-| Vendor JS files | `pkg/mcpapps/vendor/` | Done — htm-preact + Chart.js committed |
-| Makefile `vendor-js` target | `Makefile` | Done — downloads htm@3.1.1 + chart.js@4.4.8 |
-
-### Completed — Phase 2: Viewer + Pod Tools
-
-| Feature | Location | Status |
-|---------|----------|--------|
-| MCP postMessage protocol | `viewer/protocol.js` (~80 lines) | Done — exposes `window.mcpProtocol` |
-| Preact components | `viewer/components.js` (~150 lines) | Done — SortableTable, TableView, MetricsTable (data-driven), GenericView |
-| App root + routing | `viewer/app.js` (~80 lines) | Done — dual-flow: spec-compliant `tool-result` + fallback `tool-input` → `serverTools` |
-| CSS with theme fallbacks | `viewer/style.css` (~60 lines) | Done — includes `.chart-container` |
-| HTML shell + assembly | `viewer/viewer.html` (~38 lines) | Done — `INJECT_*` placeholders including `INJECT_TOOL_NAME` |
-| Chart.js bar chart | `viewer/components.js` — `MetricsTable` | Done — data-driven: reads columns, chart config, items from self-describing structured content |
-| `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` returns self-describing `map[string]any` with columns, chart, items |
-
-### Completed — Phase 3: Output Layer + Per-Tool URIs + All List Tools
-
-| Feature | Location | Status |
-|---------|----------|--------|
-| Per-tool resource URIs | `pkg/mcpapps/mcpapps.go` | Done — `ViewerHTMLForTool(toolName)`, `ToolMetaForTool(toolName)`, `ToolResourceURI(toolName)` |
-| Per-tool resource registration | `pkg/mcp/mcp.go` — `registerMCPAppResources(toolNames)` | Done — called from `reloadToolsets()`, one `ui://` resource per enabled tool |
-| Centralized Meta injection | `pkg/mcp/tool_mutator.go` — `WithAppsMeta()` | Done — injects per-tool `_meta.ui.resourceUri` |
-| `PrintObjStructured` on Output interface | `pkg/output/output.go` | Done — generic structured extraction for both YAML and Table output |
-| `PrintResult` struct | `pkg/output/output.go` | Done — holds `Text` + `Structured` |
-| `tableToStructured` helper | `pkg/output/output.go` | Done — converts `metav1.Table` → `[]map[string]any` using column definitions |
-| `NewToolCallResultFull` constructor | `pkg/api/toolsets.go` | Done — `(text, structured, err)` for explicit text + structured |
-| `structuredContent` object wrapping | `pkg/mcp/mcp.go` — `ensureStructuredObject()` | Done — wraps slice/array in `{"items": [...]}` for MCP spec compliance |
-| Viewer unwraps `items` envelope | `viewer/app.js` | Done — extracts `structured.items` for plain wrappers only (preserves self-describing objects) |
-| `namespaces_list` structured content | `pkg/toolsets/core/namespaces.go` | Done — uses `PrintObjStructured` + `NewToolCallResultFull` |
-| `projects_list` structured content | `pkg/toolsets/core/namespaces.go` | Done — same pattern |
-| `pods_list` / `pods_list_in_namespace` structured content | `pkg/toolsets/core/pods.go` | Done — uses `PrintObjStructured`, removed `extractPodListStructured` |
-| `resources_list` structured content | `pkg/toolsets/core/resources.go` | Done — uses `PrintObjStructured` + `NewToolCallResultFull` |
-| Hooks violation fix | `viewer/components.js` — `TableView` | Done — moved `useMemo` before guard clause |
-| Typed nil interface fix | `pkg/output/output.go` — `PrintObjStructured` | Done — explicit nil check before assigning to `any` |
-| Tests | `pkg/mcpapps/mcpapps_test.go` | Done — 19 tests covering per-tool HTML, embeds, placeholders, constants |
-| Tests | `pkg/mcp/text_result_test.go` | Done — tests for array wrapping and map pass-through |
-| Tests | `pkg/output/output_test.go` | Done — tests for `PrintObjStructured` (YAML and Table), `tableToStructured` |
-| Tests | `pkg/api/toolsets_test.go` | Done — tests for `NewToolCallResultFull` |
-
-### Completed — Phase 3.5: Self-Describing Metrics Structured Content
-
-| Feature | Location | Status |
-|---------|----------|--------|
-| Self-describing `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` returns `map[string]any` with `columns`, `chart`, `items` |
-| Self-describing `nodes_top` structured content | `pkg/toolsets/core/nodes.go` | Done — `extractNodesTopStructured()` with CPU/memory values and percentage utilization |
-| Data-driven `MetricsTable` component | `viewer/components.js` | Done — reads columns, chart config, items from self-describing data; generic `parseUnit()` helper |
-| Shape-based routing (replaces tool-name routing) | `viewer/app.js` | Done — detects `structured.chart && structured.columns && Array.isArray(structured.items)` |
-| Selective `items` unwrapping | `viewer/app.js` | Done — only unwraps when `Object.keys(raw).length === 1` (plain wrapper) |
-| Tests | `pkg/mcp/pods_top_test.go` | Done — structured content assertions for columns, chart, items |
-| Tests | `pkg/mcp/nodes_top_test.go` | Done — structured content assertions for self-describing shape |
-
-### Pending — Phase 4: Polish
-
-| Feature | Status |
-|---------|--------|
-| Structured content for remaining non-list tool handlers | Not started |
-| Refresh via `callServerTool()` | Not started |
-| Compact height management via `sendSizeChanged()` | Not started |
-| Filtering and pagination for table views | Not started |
-| Edge case handling (empty results, large datasets) | Not started |
-| Documentation: `docs/configuration.md` update for `apps_enabled` | Not started |
-
-### Pre-existing infrastructure (unchanged)
-
-| Feature | Location |
-|---------|----------|
-| `Tool.Meta map[string]any` | `pkg/api/toolsets.go` |
-| Meta → go-sdk conversion | `pkg/mcp/gosdk.go` — `Meta: mcp.Meta(tool.Tool.Meta)` |
-| `ToolCallResult.StructuredContent` | `pkg/api/toolsets.go` |
-| `NewToolCallResultStructured()` | `pkg/api/toolsets.go` |
-| `NewStructuredResult()` | `pkg/mcp/mcp.go` |
-| Go-SDK v1.4.0 with Extensions | `go.mod` |
-
-## 10. Architecture
+## 8. Architecture
 
 ### High-level architecture
 
@@ -777,80 +625,14 @@ The viewer supports two data flows to handle different MCP host behaviors:
    - Text fallback → `GenericView` (raw text)
 7. **Supports theme**: CSS uses `var(--color-*, fallback)` for host integration
 
-### Commit history
+## 9. Output Layer
 
-1. `67f6a18` — docs: add MCP Apps integration research document
-2. `20e78ac` — feat: add MCP Apps infrastructure and configuration (Phase 1)
-3. `d7f82de` — feat: add MCP Apps viewer with Preact rendering and structured content for pods (Phase 2)
-4. `3cb69a9` — refactor: split monolithic viewer.html into separate files and vendor Chart.js
-5. `80b4ae2` — docs: update MCP Apps research with output layer refinement plan
-6. _(next)_ — feat: add per-tool resource URIs, output layer refinement, and dual-flow viewer (Phase 3)
+The output layer (`pkg/output/`) and tool result constructors (`pkg/api/toolsets.go`)
+support generic structured content extraction without per-tool extraction functions.
 
-### End-to-end verification
+### Extending the `Output` interface with `PrintObjStructured`
 
-The feature has been verified working end-to-end with MCP Inspector: with `--apps` enabled,
-tools expose per-tool `ui://kubernetes-mcp-server/tool/{toolName}` resources. The viewer
-renders in a sandboxed iframe and supports both the spec-compliant flow (receiving `tool-result`
-from the host) and the fallback flow (calling the tool via `serverTools` when only `tool-input`
-is received). Array-typed `structuredContent` is correctly wrapped in `{"items": [...]}` to
-satisfy the MCP spec requirement that `structuredContent` must be a JSON object.
-
-## 11. Output Layer Refinement (Phase 3)
-
-**Status: Implemented.** The output layer (`pkg/output/`) and tool result constructors
-(`pkg/api/toolsets.go`) have been refined to support generic structured content extraction
-without per-tool extraction functions.
-
-### Problem analysis (solved)
-
-#### Current data flow (pods_list example)
-
-```
-K8s API → runtime.Unstructured
-    ├── PrintObj(ret) → text string (YAML or Table)     ← for LLM/Content
-    └── extractPodListStructured(ret) → []map[string]any ← for MCP Apps/StructuredContent
-                                                            (manually walks same object again)
-```
-
-The handler then manually assembles the result:
-```go
-text, textErr := params.ListOutput.PrintObj(ret)
-if structured := extractPodListStructured(ret); structured != nil {
-    return &api.ToolCallResult{Content: text, StructuredContent: structured, Error: textErr}, nil
-}
-return api.NewToolCallResult(text, textErr), nil
-```
-
-#### Three distinct problems
-
-1. **`PrintObj` returns text only** — `PrintObj(obj runtime.Unstructured) (string, error)`.
-   The Kubernetes object is already being processed (YAML marshal or Table extraction),
-   but the structured data is thrown away and must be re-extracted separately.
-
-2. **No constructor for "text + structured"** — `NewToolCallResult` is text-only,
-   `NewToolCallResultStructured` is structured-only (auto-serializes structured to JSON
-   for Content, losing human-readable formatting). The pods handlers work around this
-   by constructing `ToolCallResult` literally.
-
-3. **Per-tool extraction functions don't scale** — `extractPodListStructured()` and
-   `extractPodsTopStructured()` manually walk the Kubernetes object to pluck specific
-   fields. Every tool would need its own extraction function.
-
-#### Current tool patterns
-
-| Pattern | Tools | How they produce results |
-|---------|-------|------------------------|
-| Text-only via `PrintObj` | namespaces_list, projects_list, most list tools | `NewToolCallResult(params.ListOutput.PrintObj(ret))` |
-| Text-only via custom formatting | events_list, helm_list | `NewToolCallResult(customFormat, nil)` |
-| Text-only hardcoded | pods_get, pods_delete, pods_log | `NewToolCallResult("message", nil)` |
-| Text + structured (manual) | pods_list, pods_list_in_namespace | `PrintObj` + `extractPodListStructured` + literal struct |
-| Custom text + self-describing structured | pods_top, nodes_top | `TopCmdPrinter` + `extractPodsTopStructured`/`extractNodesTopStructured` → `map[string]any` with columns, chart, items |
-
-### Implemented changes
-
-#### Change 1: Extend `Output` interface with `PrintObjStructured`
-
-Add a new method that returns both text and structured data from the same object:
+A method that returns both text and structured data from the same object:
 
 ```go
 // PrintResult holds both the text representation and optional structured data
@@ -923,7 +705,7 @@ any Kubernetes resource type without per-resource custom code.
 the fields that `kubectl get` would show (NAME, NAMESPACE, STATUS, AGE, etc.), which
 are also the most relevant fields for the MCP Apps viewer. No per-tool extraction needed.
 
-#### Change 2: Add `NewToolCallResultFull` constructor
+### `NewToolCallResultFull` constructor
 
 A third constructor that accepts pre-formatted text alongside structured data:
 
@@ -941,26 +723,25 @@ func NewToolCallResultFull(text string, structured any, err error) *ToolCallResu
 }
 ```
 
-This replaces the literal `&api.ToolCallResult{...}` construction in pod handlers
-and makes intent explicit:
+The three constructors express clear intent:
 
 - `NewToolCallResult(text, err)` — text only (no UI data)
 - `NewToolCallResultStructured(structured, err)` — structured only (text auto-generated as JSON)
 - `NewToolCallResultFull(text, structured, err)` — both (text is human-readable, structured is for UI)
 
-#### Change 3: Simplify tool handlers
+### Simplified tool handler pattern
 
-With both changes above, a typical list tool handler becomes:
+With `PrintObjStructured` and `NewToolCallResultFull`, a typical list tool handler becomes:
 
 ```go
-// Before (pods_list pattern — 6 lines of result construction)
+// Before (6 lines of result construction)
 text, textErr := params.ListOutput.PrintObj(ret)
 if structured := extractPodListStructured(ret); structured != nil {
     return &api.ToolCallResult{Content: text, StructuredContent: structured, Error: textErr}, nil
 }
 return api.NewToolCallResult(text, textErr), nil
 
-// After (1 line)
+// After (3 lines)
 result, err := params.ListOutput.PrintObjStructured(ret)
 if err != nil {
     return api.NewToolCallResult("", fmt.Errorf("...")), nil
@@ -968,39 +749,12 @@ if err != nil {
 return api.NewToolCallResultFull(result.Text, result.Structured, nil), nil
 ```
 
-And tools that already use `NewToolCallResult(params.ListOutput.PrintObj(ret))` gain
-structured content by simply switching to `PrintObjStructured`:
+### Scope
 
-```go
-// Before (namespaces_list — text only)
-return api.NewToolCallResult(params.ListOutput.PrintObj(ret)), nil
-
-// After (text + structured, same line count)
-result, err := params.ListOutput.PrintObjStructured(ret)
-if err != nil {
-    return api.NewToolCallResult("", fmt.Errorf("...")), nil
-}
-return api.NewToolCallResultFull(result.Text, result.Structured, nil), nil
-```
-
-### What this eliminated
-
-- **All `extract*Structured()` functions** for standard Kubernetes list operations —
-  `extractPodListStructured()` removed. The `Output` implementation handles extraction generically.
-
-- **Manual `ToolCallResult` literal construction** — replaced by `NewToolCallResultFull`.
-
-- **Per-tool structured content logic in toolset files** — the output layer handles it.
-
-### What this doesn't cover
-
-- **Non-Kubernetes-object tools** (helm, events, pods_top): These produce output from
-  non-standard sources (Helm client, metrics API). They continue using custom text
-  formatting with optional structured content via `NewToolCallResultFull`.
-
-- **Viewer components**: The viewer still needs per-tool-type components (table, chart,
-  detail view). But with generic structured extraction, the viewer relies on consistent
-  data shapes rather than per-tool-specific schemas.
+The generic output layer handles standard Kubernetes list operations. **Non-Kubernetes-object
+tools** (helm, events, pods_top, nodes_top) produce output from non-standard sources (Helm
+client, metrics API). They continue using custom text formatting with optional structured
+content via `NewToolCallResultFull`.
 
 ### Impact on viewer components
 
@@ -1014,37 +768,22 @@ This means:
 - `MetricsTable` is data-driven (reads columns/chart/items from self-describing structured content, no tool-specific knowledge)
 - `GenericView` remains as fallback for non-table data
 
-### Files modified
+## 10. Per-Tool Resource URIs and Dual-Flow Viewer
 
-| File | Changes |
-|------|---------|
-| `pkg/output/output.go` | Added `PrintResult` struct, `PrintObjStructured` to interface, implemented for yaml and table, added `tableToStructured` helper |
-| `pkg/output/output_test.go` | Tests for `PrintObjStructured` (YAML and Table), `tableToStructured`, typed nil guard |
-| `pkg/api/toolsets.go` | Added `NewToolCallResultFull(text, structured, err)` constructor |
-| `pkg/api/toolsets_test.go` | Tests for `NewToolCallResultFull` |
-| `pkg/toolsets/core/pods.go` | Simplified handlers to use `PrintObjStructured` + `NewToolCallResultFull`, removed `extractPodListStructured` |
-| `pkg/toolsets/core/namespaces.go` | Switched from `PrintObj` → `PrintObjStructured` + `NewToolCallResultFull` |
-| `pkg/toolsets/core/resources.go` | Switched from `PrintObj` → `PrintObjStructured` + `NewToolCallResultFull` |
-| `pkg/mcpapps/viewer/components.js` | Generalized `TableView` to render any column set, fixed hooks violation |
+Each tool gets its own `ui://` resource URI with the tool name embedded in the viewer HTML.
+This enables a dual-flow viewer that works with both spec-compliant hosts (that send
+`tool-result`) and hosts like MCP Inspector (that only send `tool-input` and expect
+the viewer to call the tool).
 
-## 12. Per-Tool Resource URIs and Dual-Flow Viewer (Phase 3)
+### Design rationale
 
-**Status: Implemented.** Each tool gets its own `ui://` resource URI with the tool name
-embedded in the viewer HTML. This enables a dual-flow viewer that works with both
-spec-compliant hosts (that send `tool-result`) and hosts like MCP Inspector (that only
-send `tool-input` and expect the viewer to call the tool).
+Some MCP hosts (e.g., MCP Inspector's "Apps" tab) open the viewer **without calling the
+tool first** — they only send `ui/notifications/tool-input` with empty arguments, never
+`tool-result`. In this scenario, the viewer needs to know which tool it belongs to so it
+can call the tool via `serverTools`. Per-tool resource URIs solve this by embedding the
+tool name (`window.__mcpToolName`) into each viewer's HTML.
 
-### Problem: MCP Inspector doesn't send tool-result
-
-During testing with MCP Inspector, the viewer showed "Waiting for tool result..." instead
-of rendering results. Investigation revealed:
-
-- The MCP Inspector's "Apps" tab opens the viewer **without calling the tool first**
-- It only sends `ui/notifications/tool-input` (with empty arguments), never `tool-result`
-- The viewer's `hostContext` only contained `{theme: "dark"}` — no `toolInfo`
-- The viewer had no way to know which tool it belonged to or call it
-
-### Solution: Per-tool resource URIs
+### Per-tool resource URIs
 
 Instead of a single shared `ui://kubernetes-mcp-server/viewer.html` resource, each tool
 gets its own resource URI:
@@ -1077,45 +816,16 @@ avoid timing windows:
    tool via `protocol.sendRequest('tools/call', {name: toolName, arguments: args})`,
    and renders the result.
 
-### Files modified
+## 11. structuredContent Object Wrapping
 
-| File | Changes |
-|------|---------|
-| `pkg/mcpapps/mcpapps.go` | Replaced `ViewerHTML()` → `ViewerHTMLForTool(toolName)`, `ToolMeta()` → `ToolMetaForTool(toolName)`, added `ToolResourceURI(toolName)`, `sync.Map` for per-tool caching |
-| `pkg/mcpapps/mcpapps_test.go` | Rewritten for per-tool API: 19 tests |
-| `pkg/mcpapps/viewer/viewer.html` | Added `INJECT_TOOL_NAME` placeholder |
-| `pkg/mcpapps/viewer/app.js` | Dual-flow: `tool-result` (spec) + `tool-input` → `serverTools` (fallback) |
-| `pkg/mcpapps/viewer/protocol.js` | Added responses to unhandled requests, improved logging |
-| `pkg/mcp/mcp.go` | Changed `registerMCPAppResources()` to per-tool, moved to `reloadToolsets()` |
-| `pkg/mcp/tool_mutator.go` | Updated `WithAppsMeta()` to use `ToolMetaForTool(tool.Tool.Name)` |
-
-## 13. structuredContent Object Wrapping (Phase 3)
-
-**Status: Implemented.** The MCP specification requires `structuredContent` to marshal
-to a JSON **object** (record), but the output layer produces `[]map[string]any` (arrays)
-for list operations. This caused validation failures in MCP hosts.
-
-### Problem
-
-When calling `namespaces_list` via the viewer's `serverTools` flow, the MCP Inspector
-returned an error:
-
-```json
-{
-  "expected": "record",
-  "code": "invalid_type",
-  "path": ["structuredContent"],
-  "message": "Invalid input"
-}
-```
-
-The Go SDK validates `structuredContent` at serialization time:
-> "It must marshal to a JSON object." — go-sdk `protocol.go:90`
+The MCP specification requires `structuredContent` to marshal to a JSON **object** (record),
+but the output layer produces `[]map[string]any` (arrays) for list operations. This requires
+wrapping arrays before they reach the MCP protocol layer.
 
 ### Solution
 
-Added `ensureStructuredObject()` in `pkg/mcp/mcp.go` that uses `reflect` to detect
-slice/array values and wraps them in `{"items": [...]}`:
+`ensureStructuredObject()` in `pkg/mcp/mcp.go` uses `reflect` to detect slice/array values
+and wraps them in `{"items": [...]}`:
 
 ```go
 func ensureStructuredObject(v any) any {
@@ -1136,7 +846,327 @@ var raw = result.structuredContent;
 var structured = (raw && raw.items && Array.isArray(raw.items)) ? raw.items : raw;
 ```
 
-### Files modified
+The unwrapping is selective: it only extracts `structured.items` when the wrapper object
+has a single key (plain wrapper), preserving self-describing objects (like metrics data
+that contain `chart`, `columns`, and `items` together).
+
+## 12. Known Compatibility Notes
+
+### VS Code: Resource Registration Ordering
+
+MCP Apps resources must be registered **before** tools in `reloadToolsets()`. The go-sdk's
+`AddTool()` calls `changeAndNotify()` which sends a `notifications/tools/list_changed`
+notification to connected clients **immediately** after each tool is added.
+
+VS Code eagerly pre-fetches MCP App resources: when it receives `tools/list_changed`, it calls
+`tools/list`, reads `_meta.ui.resourceUri` from each tool, and immediately calls `resources/read`
+to pre-load the UI HTML. If resources are registered after tools, VS Code's `resources/read`
+request arrives before the resource exists, producing error `-32002` (Resource not found).
+
+MCP Inspector does not pre-fetch resources this way — it only loads them on demand when the user
+opens the "Apps" tab, by which time the resources are already registered.
+
+### How VS Code Discovers MCP App Resources
+
+Investigation of the [VS Code source code](https://github.com/microsoft/vscode/blob/5b38f1d5296b42ae51049d452362b673ff714dbe/src/vs/platform/mcp/common/modelContextProtocolApps.ts)
+revealed the complete flow:
+
+1. **`mcpServer.ts::_normalizeTool()`** — reads `_meta.ui.resourceUri` (nested key) from the
+   tool definition and stores it on the tool object.
+2. **`mcpLanguageModelToolContribution.ts::prepareToolInvocation()`** — passes the URI unchanged
+   into `IMcpToolCallUIData`.
+3. **`mcpToolCallUI.ts::loadResource()`** — calls `resources/read` with the URI **verbatim**
+   (no transformation, encoding, or normalization).
+4. **`mcpServerRequestHandler.ts`** — sends the `resources/read` MCP protocol request.
+
+Key detail: VS Code reads the **nested** `_meta.ui.resourceUri` key, not the legacy flat
+`_meta["ui/resourceUri"]` key.
+
+### Registration order solution
+
+Resources are registered before tools in `reloadToolsets()`:
+
+```go
+// Build tool name list from applicable tools
+newToolNames := make([]string, 0, len(applicableTools))
+for _, t := range applicableTools {
+    newToolNames = append(newToolNames, t.Tool.Name)
+}
+
+// Register resources BEFORE tools so they're available when clients
+// receive tools/list_changed and immediately try resources/read
+if s.configuration.AppsEnabled {
+    s.registerMCPAppResources(newToolNames)
+}
+
+// Now register tools (each AddTool sends tools/list_changed)
+newTools, err := reloadItems(previousTools, applicableTools, ...)
+```
+
+### Legacy `_meta` key
+
+`ToolMetaForTool()` sets both metadata formats for backward compatibility, matching what
+the ext-apps SDK's `registerAppTool()` does:
+
+```go
+return map[string]any{
+    "ui":             map[string]any{"resourceUri": uri},  // nested (VS Code reads this)
+    "ui/resourceUri": uri,                                  // flat legacy key
+}
+```
+
+### Key takeaway
+
+When an MCP server registers tools with `_meta.ui.resourceUri`, the corresponding resources
+**must** be registered before the tools. The go-sdk sends `tools/list_changed` notifications
+synchronously within `AddTool()`, and eager clients like VS Code will immediately try to read
+the referenced resources.
+
+---
+
+## Appendix A: Research and Development Journal
+
+> **Note**: This appendix contains research context, implementation status tracking, development
+> history, and other material from the original research document. It is preserved here for
+> reference during PR review and can be removed once the spec and implementation are finalized.
+
+### A.1 PoC Reference (openshift-mcp-server PR #143)
+
+[PR #143](https://github.com/openshift/openshift-mcp-server/pull/143) is a rough PoC
+implementing a Pods Top dashboard with MCP Apps.
+
+#### What it does
+
+- Adds a `mcp-app/` directory with a Vite + TypeScript frontend build
+- Uses `vite-plugin-singlefile` to produce a single HTML with all JS/CSS inlined
+- Bundles the HTML into Go binary via `//go:embed`
+- Uses `@modelcontextprotocol/ext-apps` SDK (v1.0.0) for host communication
+- Implements column sorting, refresh via `app.callServerTool()`, dark/light theme support
+
+#### Architecture (3 layers)
+
+1. **Go embed package** (`mcp-app/mcpapp.go`):
+   - `//go:embed dist/pods-top-app.html`
+   - `Resources()` returns a registry of all app resources
+   - `ToolMeta(resourceURI)` helper generates `_meta` map
+   - MIME type: `text/html;profile=mcp-app`
+   - Resource URI: `ui://kubernetes-mcp-server/pods-top.html`
+
+2. **MCP resource registration** (`pkg/mcp/mcp.go`):
+   - Iterates `mcpapp.Resources()` and registers each as an MCP resource
+   - Enables `Resources` capability (was `nil` before)
+
+3. **Tool linkage** (`pkg/toolsets/core/pods.go`):
+   - `pods_top` tool gets `Meta: mcpapp.ToolMeta(mcpapp.PodsTopResourceURI)`
+   - Tool handler returns both text and `structuredContent`
+
+#### Concerns noted
+
+- **Build step required**: `npm install && vite build` as dependency of `make build`
+- **Committed build artifacts**: `dist/pods-top-app.html` in git (should be .gitignored)
+- **innerHTML without sanitization**: XSS risk if pod names contain HTML-special characters
+- **SDK size**: `@modelcontextprotocol/ext-apps` is 314 KB (mostly Zod validation)
+- **Tight Go/TypeScript coupling**: Matching struct/interface with no shared schema
+
+#### Patterns reused in our implementation
+
+- `//go:embed` for bundling HTML into Go binary
+- `ToolMeta()` helper for consistent `_meta` structure
+- Dual content return (text + structured) for backward compatibility
+- Theme support via CSS custom property fallbacks
+
+#### Patterns intentionally avoided
+
+- **No build step**: We inline JS directly, no Vite/npm required
+- **No ext-apps SDK**: Custom ~80-line protocol implementation instead of 314 KB SDK
+- **Per-tool resource URIs** (not per-tool HTML files): Single generic viewer template,
+  but each tool gets its own `ui://` resource URI with the tool name injected into the HTML
+  via `window.__mcpToolName`. This enables the dual-flow viewer (see [Section 10](#10-per-tool-resource-uris-and-dual-flow-viewer)).
+
+### A.2 Implementation Status
+
+#### Completed — Phase 1: Infrastructure + Configuration
+
+| Feature | Location | Status |
+|---------|----------|--------|
+| `AppsEnabled bool` config field | `pkg/config/config.go` | Done |
+| `IsAppsEnabled()` getter | `pkg/config/config.go` | Done |
+| `--apps` CLI flag | `pkg/kubernetes-mcp-server/cmd/root.go` | Done |
+| Extension registration | `pkg/mcp/mcp.go` | Done — `caps.AddExtension("io.modelcontextprotocol/ui", nil)` |
+| Resources capability | `pkg/mcp/mcp.go` | Done — `caps.Resources = &mcp.ResourceCapabilities{}` |
+| Vendor JS files | `pkg/mcpapps/vendor/` | Done — htm-preact + Chart.js committed |
+| Makefile `vendor-js` target | `Makefile` | Done — downloads htm@3.1.1 + chart.js@4.4.8 |
+
+#### Completed — Phase 2: Viewer + Pod Tools
+
+| Feature | Location | Status |
+|---------|----------|--------|
+| MCP postMessage protocol | `viewer/protocol.js` (~80 lines) | Done — exposes `window.mcpProtocol` |
+| Preact components | `viewer/components.js` (~150 lines) | Done — SortableTable, TableView, MetricsTable (data-driven), GenericView |
+| App root + routing | `viewer/app.js` (~80 lines) | Done — dual-flow: spec-compliant `tool-result` + fallback `tool-input` → `serverTools` |
+| CSS with theme fallbacks | `viewer/style.css` (~60 lines) | Done — includes `.chart-container` |
+| HTML shell + assembly | `viewer/viewer.html` (~38 lines) | Done — `INJECT_*` placeholders including `INJECT_TOOL_NAME` |
+| Chart.js bar chart | `viewer/components.js` — `MetricsTable` | Done — data-driven: reads columns, chart config, items from self-describing structured content |
+| `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` returns self-describing `map[string]any` with columns, chart, items |
+
+#### Completed — Phase 3: Output Layer + Per-Tool URIs + All List Tools
+
+| Feature | Location | Status |
+|---------|----------|--------|
+| Per-tool resource URIs | `pkg/mcpapps/mcpapps.go` | Done — `ViewerHTMLForTool(toolName)`, `ToolMetaForTool(toolName)`, `ToolResourceURI(toolName)` |
+| Per-tool resource registration | `pkg/mcp/mcp.go` — `registerMCPAppResources(toolNames)` | Done — called from `reloadToolsets()`, one `ui://` resource per enabled tool |
+| Centralized Meta injection | `pkg/mcp/tool_mutator.go` — `WithAppsMeta()` | Done — injects per-tool `_meta.ui.resourceUri` |
+| `PrintObjStructured` on Output interface | `pkg/output/output.go` | Done — generic structured extraction for both YAML and Table output |
+| `PrintResult` struct | `pkg/output/output.go` | Done — holds `Text` + `Structured` |
+| `tableToStructured` helper | `pkg/output/output.go` | Done — converts `metav1.Table` → `[]map[string]any` using column definitions |
+| `NewToolCallResultFull` constructor | `pkg/api/toolsets.go` | Done — `(text, structured, err)` for explicit text + structured |
+| `structuredContent` object wrapping | `pkg/mcp/mcp.go` — `ensureStructuredObject()` | Done — wraps slice/array in `{"items": [...]}` for MCP spec compliance |
+| Viewer unwraps `items` envelope | `viewer/app.js` | Done — extracts `structured.items` for plain wrappers only (preserves self-describing objects) |
+| `namespaces_list` structured content | `pkg/toolsets/core/namespaces.go` | Done — uses `PrintObjStructured` + `NewToolCallResultFull` |
+| `projects_list` structured content | `pkg/toolsets/core/namespaces.go` | Done — same pattern |
+| `pods_list` / `pods_list_in_namespace` structured content | `pkg/toolsets/core/pods.go` | Done — uses `PrintObjStructured`, removed `extractPodListStructured` |
+| `resources_list` structured content | `pkg/toolsets/core/resources.go` | Done — uses `PrintObjStructured` + `NewToolCallResultFull` |
+| Hooks violation fix | `viewer/components.js` — `TableView` | Done — moved `useMemo` before guard clause |
+| Typed nil interface fix | `pkg/output/output.go` — `PrintObjStructured` | Done — explicit nil check before assigning to `any` |
+| Tests | `pkg/mcpapps/mcpapps_test.go` | Done — 19 tests covering per-tool HTML, embeds, placeholders, constants |
+| Tests | `pkg/mcp/text_result_test.go` | Done — tests for array wrapping and map pass-through |
+| Tests | `pkg/output/output_test.go` | Done — tests for `PrintObjStructured` (YAML and Table), `tableToStructured` |
+| Tests | `pkg/api/toolsets_test.go` | Done — tests for `NewToolCallResultFull` |
+
+#### Completed — Phase 3.5: Self-Describing Metrics Structured Content
+
+| Feature | Location | Status |
+|---------|----------|--------|
+| Self-describing `pods_top` structured content | `pkg/toolsets/core/pods.go` | Done — `extractPodsTopStructured()` returns `map[string]any` with `columns`, `chart`, `items` |
+| Self-describing `nodes_top` structured content | `pkg/toolsets/core/nodes.go` | Done — `extractNodesTopStructured()` with CPU/memory values and percentage utilization |
+| Data-driven `MetricsTable` component | `viewer/components.js` | Done — reads columns, chart config, items from self-describing data; generic `parseUnit()` helper |
+| Shape-based routing (replaces tool-name routing) | `viewer/app.js` | Done — detects `structured.chart && structured.columns && Array.isArray(structured.items)` |
+| Selective `items` unwrapping | `viewer/app.js` | Done — only unwraps when `Object.keys(raw).length === 1` (plain wrapper) |
+| Tests | `pkg/mcp/pods_top_test.go` | Done — structured content assertions for columns, chart, items |
+| Tests | `pkg/mcp/nodes_top_test.go` | Done — structured content assertions for self-describing shape |
+
+#### Pending — Phase 4: Polish
+
+| Feature | Status |
+|---------|--------|
+| Structured content for remaining non-list tool handlers | Not started |
+| Refresh via `callServerTool()` | Not started |
+| Compact height management via `sendSizeChanged()` | Not started |
+| Filtering and pagination for table views | Not started |
+| Edge case handling (empty results, large datasets) | Not started |
+| Documentation: `docs/configuration.md` update for `apps_enabled` | Not started |
+
+#### Pre-existing infrastructure (unchanged)
+
+| Feature | Location |
+|---------|----------|
+| `Tool.Meta map[string]any` | `pkg/api/toolsets.go` |
+| Meta → go-sdk conversion | `pkg/mcp/gosdk.go` — `Meta: mcp.Meta(tool.Tool.Meta)` |
+| `ToolCallResult.StructuredContent` | `pkg/api/toolsets.go` |
+| `NewToolCallResultStructured()` | `pkg/api/toolsets.go` |
+| `NewStructuredResult()` | `pkg/mcp/mcp.go` |
+| Go-SDK v1.4.0 with Extensions | `go.mod` |
+
+### A.3 Commit History
+
+1. `67f6a18` — docs: add MCP Apps integration research document
+2. `20e78ac` — feat: add MCP Apps infrastructure and configuration (Phase 1)
+3. `d7f82de` — feat: add MCP Apps viewer with Preact rendering and structured content for pods (Phase 2)
+4. `3cb69a9` — refactor: split monolithic viewer.html into separate files and vendor Chart.js
+5. `80b4ae2` — docs: update MCP Apps research with output layer refinement plan
+6. _(next)_ — feat: add per-tool resource URIs, output layer refinement, and dual-flow viewer (Phase 3)
+
+### A.4 End-to-End Verification
+
+The feature has been verified working end-to-end with MCP Inspector: with `--apps` enabled,
+tools expose per-tool `ui://kubernetes-mcp-server/tool/{toolName}` resources. The viewer
+renders in a sandboxed iframe and supports both the spec-compliant flow (receiving `tool-result`
+from the host) and the fallback flow (calling the tool via `serverTools` when only `tool-input`
+is received). Array-typed `structuredContent` is correctly wrapped in `{"items": [...]}` to
+satisfy the MCP spec requirement that `structuredContent` must be a JSON object.
+
+### A.5 Output Layer Problem Analysis
+
+#### Data flow before refinement (pods_list example)
+
+```
+K8s API → runtime.Unstructured
+    ├── PrintObj(ret) → text string (YAML or Table)     ← for LLM/Content
+    └── extractPodListStructured(ret) → []map[string]any ← for MCP Apps/StructuredContent
+                                                            (manually walks same object again)
+```
+
+The handler then manually assembled the result:
+```go
+text, textErr := params.ListOutput.PrintObj(ret)
+if structured := extractPodListStructured(ret); structured != nil {
+    return &api.ToolCallResult{Content: text, StructuredContent: structured, Error: textErr}, nil
+}
+return api.NewToolCallResult(text, textErr), nil
+```
+
+#### Three distinct problems solved
+
+1. **`PrintObj` returns text only** — `PrintObj(obj runtime.Unstructured) (string, error)`.
+   The Kubernetes object is already being processed (YAML marshal or Table extraction),
+   but the structured data is thrown away and must be re-extracted separately.
+
+2. **No constructor for "text + structured"** — `NewToolCallResult` is text-only,
+   `NewToolCallResultStructured` is structured-only (auto-serializes structured to JSON
+   for Content, losing human-readable formatting). The pods handlers work around this
+   by constructing `ToolCallResult` literally.
+
+3. **Per-tool extraction functions don't scale** — `extractPodListStructured()` and
+   `extractPodsTopStructured()` manually walk the Kubernetes object to pluck specific
+   fields. Every tool would need its own extraction function.
+
+#### What the refinement eliminated
+
+- **All `extract*Structured()` functions** for standard Kubernetes list operations —
+  `extractPodListStructured()` removed. The `Output` implementation handles extraction generically.
+
+- **Manual `ToolCallResult` literal construction** — replaced by `NewToolCallResultFull`.
+
+- **Per-tool structured content logic in toolset files** — the output layer handles it.
+
+#### Tool patterns before and after
+
+| Pattern | Tools | How they produce results |
+|---------|-------|------------------------|
+| Text-only via `PrintObj` | namespaces_list, projects_list, most list tools | `NewToolCallResult(params.ListOutput.PrintObj(ret))` |
+| Text-only via custom formatting | events_list, helm_list | `NewToolCallResult(customFormat, nil)` |
+| Text-only hardcoded | pods_get, pods_delete, pods_log | `NewToolCallResult("message", nil)` |
+| Text + structured (manual) | pods_list, pods_list_in_namespace | `PrintObj` + `extractPodListStructured` + literal struct |
+| Custom text + self-describing structured | pods_top, nodes_top | `TopCmdPrinter` + `extractPodsTopStructured`/`extractNodesTopStructured` → `map[string]any` with columns, chart, items |
+
+### A.6 Files Modified Per Feature
+
+#### Output layer refinement
+
+| File | Changes |
+|------|---------|
+| `pkg/output/output.go` | Added `PrintResult` struct, `PrintObjStructured` to interface, implemented for yaml and table, added `tableToStructured` helper |
+| `pkg/output/output_test.go` | Tests for `PrintObjStructured` (YAML and Table), `tableToStructured`, typed nil guard |
+| `pkg/api/toolsets.go` | Added `NewToolCallResultFull(text, structured, err)` constructor |
+| `pkg/api/toolsets_test.go` | Tests for `NewToolCallResultFull` |
+| `pkg/toolsets/core/pods.go` | Simplified handlers to use `PrintObjStructured` + `NewToolCallResultFull`, removed `extractPodListStructured` |
+| `pkg/toolsets/core/namespaces.go` | Switched from `PrintObj` → `PrintObjStructured` + `NewToolCallResultFull` |
+| `pkg/toolsets/core/resources.go` | Switched from `PrintObj` → `PrintObjStructured` + `NewToolCallResultFull` |
+| `pkg/mcpapps/viewer/components.js` | Generalized `TableView` to render any column set, fixed hooks violation |
+
+#### Per-tool resource URIs
+
+| File | Changes |
+|------|---------|
+| `pkg/mcpapps/mcpapps.go` | Replaced `ViewerHTML()` → `ViewerHTMLForTool(toolName)`, `ToolMeta()` → `ToolMetaForTool(toolName)`, added `ToolResourceURI(toolName)`, `sync.Map` for per-tool caching |
+| `pkg/mcpapps/mcpapps_test.go` | Rewritten for per-tool API: 19 tests |
+| `pkg/mcpapps/viewer/viewer.html` | Added `INJECT_TOOL_NAME` placeholder |
+| `pkg/mcpapps/viewer/app.js` | Dual-flow: `tool-result` (spec) + `tool-input` → `serverTools` (fallback) |
+| `pkg/mcpapps/viewer/protocol.js` | Added responses to unhandled requests, improved logging |
+| `pkg/mcp/mcp.go` | Changed `registerMCPAppResources()` to per-tool, moved to `reloadToolsets()` |
+| `pkg/mcp/tool_mutator.go` | Updated `WithAppsMeta()` to use `ToolMetaForTool(tool.Tool.Name)` |
+
+#### structuredContent object wrapping
 
 | File | Changes |
 |------|---------|
@@ -1144,16 +1174,22 @@ var structured = (raw && raw.items && Array.isArray(raw.items)) ? raw.items : ra
 | `pkg/mcp/text_result_test.go` | Tests for array wrapping and map pass-through |
 | `pkg/mcpapps/viewer/app.js` | Unwraps `{"items": [...]}` envelope |
 
----
+#### VS Code compatibility fix
 
-## 14. Frontend Browser Testing
+| File | Changes |
+|------|---------|
+| `pkg/mcp/mcp.go` | Moved `registerMCPAppResources()` before `reloadItems` for tools |
+| `pkg/mcpapps/mcpapps.go` | Added legacy flat `"ui/resourceUri"` key to `ToolMetaForTool()` |
+| `pkg/mcpapps/mcpapps_test.go` | Tests for both nested and legacy `_meta` keys |
+
+### A.7 Frontend Browser Testing
 
 Browser tests are **foundational infrastructure** — the test harness and first tests should be
 set up alongside the initial viewer implementation, not deferred to a later phase. Each feature
 (table rendering, metrics charts, theming, sorting) gets its browser tests written as part of
 the same phase that implements the feature.
 
-### Why Browser Tests Are Needed
+#### Why Browser Tests Are Needed
 
 The MCP Apps viewer is a Preact-based SPA served as a self-contained HTML blob (~220KB with
 vendored JS). It communicates with its parent frame via **postMessage JSON-RPC**, not HTTP.
@@ -1161,7 +1197,7 @@ Go unit tests (`mcpapps_test.go`) can verify HTML assembly and resource URIs, bu
 test rendering, component routing, user interactions, or the postMessage protocol flow. Only
 a real browser can validate that the viewer works end-to-end.
 
-### Library Choice: Rod (go-rod/rod)
+#### Library Choice: Rod (go-rod/rod)
 
 | | |
 |---|---|
@@ -1194,7 +1230,7 @@ most popular Go browser library, battle-tested, pure Go with zero dependencies. 
 more verbose DSL-like API, no auto-wait (manual `chromedp.WaitVisible` required), requires
 system Chrome or Docker image (no auto-download).
 
-### Test Architecture: Wrapper Page with iframe
+#### Test Architecture: Wrapper Page with iframe
 
 The viewer communicates via `window.parent.postMessage()` JSON-RPC. In production, the parent
 is the MCP host (Claude Desktop, VS Code, etc.). In tests, we **simulate the MCP host** using
@@ -1258,7 +1294,7 @@ window.sendToolResult = function(data) {
 9. Go test navigates into iframe DOM and asserts on rendered elements
 ```
 
-### What to Test (incrementally, alongside each feature)
+#### What to Test (incrementally, alongside each feature)
 
 | Test Category | Phase |
 |---|---|
@@ -1272,122 +1308,31 @@ window.sendToolResult = function(data) {
 | **Host context changes**: `host-context-changed` notification updates theme live | Theming |
 | **Error handling**: error state renders error message in `.status` element | Error paths |
 
-### CI Considerations
+#### CI Considerations
 
 - **Build tag**: Use `//go:build browser` to separate browser tests from unit tests.
   Browser tests are slower (launch Chromium) and should run in a dedicated CI step.
 - **Rod auto-downloads Chromium**: No extra CI setup. Works on `ubuntu-latest`.
-- **Timeouts**: Set reasonable timeouts (10–15s) for async rendering waits.
+- **Timeouts**: Set reasonable timeouts (10-15s) for async rendering waits.
 - **Viewport**: Use `rod.New().NoDefaultDevice()` for consistent viewport sizing.
 - **Makefile target**: Add `make test-browser` that runs `go test -tags browser ./pkg/mcpapps/...`.
 - **First run**: Rod downloads Chromium on first invocation (~150MB). Cache in CI via
   `~/.cache/rod` or equivalent.
 
-### Impact on go.mod
+#### Impact on go.mod
 
 ```
 github.com/go-rod/rod v0.116.x  (zero transitive Go dependencies)
 ```
 
-### Decision
+#### Decision
 
 **Rod + Wrapper iframe approach**. Test harness infrastructure set up in Phase 1 alongside
 the initial viewer. Tests added incrementally as each frontend feature is implemented.
 
----
+### A.8 Why signals-core Was Removed
 
-## 15. VS Code Compatibility: Resource Registration Ordering
-
-**Status: Resolved.** MCP Apps worked in MCP Inspector but failed in VS Code with
-`Error loading MCP App: MPC -32002: Resource not found`. Root cause was a race condition
-between tool registration and resource registration.
-
-### Problem
-
-VS Code failed to load MCP App resources with error code `-32002` (Resource not found),
-while the same server worked correctly with MCP Inspector.
-
-### Root Cause: Race Condition in `reloadToolsets()`
-
-The go-sdk's `AddTool()` calls `changeAndNotify()` which sends a `notifications/tools/list_changed`
-notification to connected clients **immediately** after each tool is added. The original
-`reloadToolsets()` flow was:
-
-```
-1. Register tools (each AddTool → sends tools/list_changed to VS Code)
-2. Register resources AFTER all tools
-```
-
-VS Code eagerly pre-fetches MCP App resources: when it receives `tools/list_changed`, it calls
-`tools/list`, reads `_meta.ui.resourceUri` from each tool, and immediately calls `resources/read`
-to pre-load the UI HTML. Because resources were registered AFTER tools, VS Code's `resources/read`
-request arrived before the resource existed, producing `-32002`.
-
-MCP Inspector does not pre-fetch resources this way — it only loads them on demand when the user
-opens the "Apps" tab, by which time the resources are already registered.
-
-### How VS Code Discovers MCP App Resources
-
-Investigation of the [VS Code source code](https://github.com/microsoft/vscode/blob/5b38f1d5296b42ae51049d452362b673ff714dbe/src/vs/platform/mcp/common/modelContextProtocolApps.ts)
-revealed the complete flow:
-
-1. **`mcpServer.ts::_normalizeTool()`** — reads `_meta.ui.resourceUri` (nested key) from the
-   tool definition and stores it on the tool object.
-2. **`mcpLanguageModelToolContribution.ts::prepareToolInvocation()`** — passes the URI unchanged
-   into `IMcpToolCallUIData`.
-3. **`mcpToolCallUI.ts::loadResource()`** — calls `resources/read` with the URI **verbatim**
-   (no transformation, encoding, or normalization).
-4. **`mcpServerRequestHandler.ts`** — sends the `resources/read` MCP protocol request.
-
-Key detail: VS Code reads the **nested** `_meta.ui.resourceUri` key, not the legacy flat
-`_meta["ui/resourceUri"]` key.
-
-### Solution
-
-Moved resource registration to run **before** tool registration in `reloadToolsets()`:
-
-```go
-// Build tool name list from applicable tools
-newToolNames := make([]string, 0, len(applicableTools))
-for _, t := range applicableTools {
-    newToolNames = append(newToolNames, t.Tool.Name)
-}
-
-// Register resources BEFORE tools so they're available when clients
-// receive tools/list_changed and immediately try resources/read
-if s.configuration.AppsEnabled {
-    s.registerMCPAppResources(newToolNames)
-}
-
-// Now register tools (each AddTool sends tools/list_changed)
-newTools, err := reloadItems(previousTools, applicableTools, ...)
-```
-
-This ensures resources exist before any `tools/list_changed` notification is sent.
-
-### Legacy `_meta` Key
-
-Additionally, `ToolMetaForTool()` was updated to set both metadata formats for backward
-compatibility, matching what the ext-apps SDK's `registerAppTool()` does:
-
-```go
-return map[string]any{
-    "ui":             map[string]any{"resourceUri": uri},  // nested (VS Code reads this)
-    "ui/resourceUri": uri,                                  // flat legacy key
-}
-```
-
-### Key Takeaway
-
-When an MCP server registers tools with `_meta.ui.resourceUri`, the corresponding resources
-**must** be registered before the tools. The go-sdk sends `tools/list_changed` notifications
-synchronously within `AddTool()`, and eager clients like VS Code will immediately try to read
-the referenced resources.
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `pkg/mcp/mcp.go` | Moved `registerMCPAppResources()` before `reloadItems` for tools |
-| `pkg/mcpapps/mcpapps.go` | Added legacy flat `"ui/resourceUri"` key to `ToolMetaForTool()` |
-| `pkg/mcpapps/mcpapps_test.go` | Tests for both nested and legacy `_meta` keys |
+- Originally vendored (`@preact/signals-core@1.8.0`, ~4 KB) but **never used**
+- The viewer exclusively uses Preact hooks (`useState`, `useEffect`, `useRef`, etc.)
+- Its ESM `export{...}` statement caused a SyntaxError inside the IIFE wrapper
+- Removed in Phase 2 restructuring
