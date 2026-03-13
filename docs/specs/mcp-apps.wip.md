@@ -18,6 +18,7 @@ MCP Apps enables tools to return interactive HTML-based UIs rendered in sandboxe
 - [10. Per-Tool Resource URIs and Dual-Flow Viewer](#10-per-tool-resource-uris-and-dual-flow-viewer)
 - [11. structuredContent Object Wrapping](#11-structuredcontent-object-wrapping)
 - [12. Known Compatibility Notes](#12-known-compatibility-notes)
+- [13. YAML Syntax Highlighting](#13-yaml-syntax-highlighting)
 - [Appendix A: Research and Development Journal](#appendix-a-research-and-development-journal)
 
 ---
@@ -273,8 +274,9 @@ Apps can request different display modes:
 |---------|----------|---------|
 | `htm@3.1.1/preact/standalone.umd.js` | ~13 KB | Preact + HTM + Hooks in one UMD bundle |
 | `chart.js@4.4.8/dist/chart.umd.min.js` | ~205 KB | Bar charts for metrics visualization |
+| `prismjs@1.30.0` (core + YAML) | ~9.4 KB | YAML syntax highlighting (see [Section 13](#13-yaml-syntax-highlighting)) |
 | MCP protocol (custom implementation) | ~2 KB | JSON-RPC over postMessage |
-| **Total** | **~220 KB** | |
+| **Total** | **~230 KB** | |
 
 **Why Preact over Alpine.js:**
 - Component model matches "data in, UI out" widget pattern
@@ -326,6 +328,7 @@ Actual Makefile target:
 ```makefile
 HTM_VERSION ?= 3.1.1
 CHART_JS_VERSION ?= 4.4.8
+PRISM_VERSION ?= 1.30.0
 MCP_APPS_VENDOR_DIR ?= pkg/mcpapps/vendor
 
 .PHONY: vendor-js
@@ -335,6 +338,10 @@ vendor-js:
 		-o $(MCP_APPS_VENDOR_DIR)/htm-preact-standalone.umd.js
 	curl -sL "https://cdn.jsdelivr.net/npm/chart.js@$(CHART_JS_VERSION)/dist/chart.umd.min.js" \
 		-o $(MCP_APPS_VENDOR_DIR)/chart.umd.min.js
+	curl -sL "https://cdn.jsdelivr.net/npm/prismjs@$(PRISM_VERSION)/components/prism-core.min.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/prism-core.min.js
+	curl -sL "https://cdn.jsdelivr.net/npm/prismjs@$(PRISM_VERSION)/components/prism-yaml.min.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/prism-yaml.min.js
 ```
 
 ## 6. MCP postMessage Protocol
@@ -497,6 +504,7 @@ the server can re-register tools with or without `_meta.ui` on the next `reloadT
 │  │  viewer.html (per-tool, assembled at startup)  │  │
 │  │  ├── Inline: htm/preact/standalone (~13 KB)    │  │
 │  │  ├── Inline: Chart.js UMD         (~205 KB)    │  │
+│  │  ├── Inline: Prism.js core+YAML   (~9.4 KB)   │  │
 │  │  ├── Inline: protocol.js           (~2 KB)     │  │
 │  │  ├── Inline: components.js         (~5 KB)     │  │
 │  │  ├── Inline: window.__mcpToolName = 'X'        │  │
@@ -542,7 +550,9 @@ pkg/mcpapps/
 │   └── app.js          # App root + dual-flow + render/mount (~130 lines)
 └── vendor/
     ├── htm-preact-standalone.umd.js   # ~13 KB (htm@3.1.1)
-    └── chart.umd.min.js              # ~205 KB (chart.js@4.4.8)
+    ├── chart.umd.min.js              # ~205 KB (chart.js@4.4.8)
+    ├── prism-core.min.js             # ~7.5 KB (prismjs@1.30.0)
+    └── prism-yaml.min.js             # ~1.9 KB (prismjs@1.30.0)
 ```
 
 ### HTML assembly (mcpapps.go)
@@ -570,6 +580,8 @@ func buildBaseHTML() string {
         baseHTML = strings.Replace(baseHTML, "INJECT_CSS", mustReadFile("viewer/style.css"), 1)
         baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_HTM_PREACT", mustReadFile("vendor/htm-preact-standalone.umd.js"), 1)
         baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_CHART_JS", mustReadFile("vendor/chart.umd.min.js"), 1)
+        baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_PRISM_CORE", mustReadFile("vendor/prism-core.min.js"), 1)
+        baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_PRISM_YAML", mustReadFile("vendor/prism-yaml.min.js"), 1)
         baseHTML = strings.Replace(baseHTML, "INJECT_PROTOCOL_JS", mustReadFile("viewer/protocol.js"), 1)
         baseHTML = strings.Replace(baseHTML, "INJECT_COMPONENTS_JS", mustReadFile("viewer/components.js"), 1)
         baseHTML = strings.Replace(baseHTML, "INJECT_APP_JS", mustReadFile("viewer/app.js"), 1)
@@ -587,8 +599,8 @@ func ViewerHTMLForTool(toolName string) string {
 }
 ```
 
-Script load order in `viewer.html`: vendor libs first (htm-preact, Chart.js),
-then protocol → components → tool name injection → app.
+Script load order in `viewer.html`: vendor libs first (htm-preact, Chart.js,
+Prism core + YAML grammar), then protocol → components → tool name injection → app.
 
 ### JS namespace communication
 
@@ -622,8 +634,104 @@ The viewer supports two data flows to handle different MCP host behaviors:
    - Self-describing metrics (`chart` + `columns` + `items[]`) → `MetricsTable` (Chart.js bar chart + sortable table)
    - Any structured array → `TableView` (generic sortable table)
    - Other structured data → `GenericView` (formatted JSON)
+   - YAML text content → `YamlView` (Prism.js syntax-highlighted YAML)
    - Text fallback → `GenericView` (raw text)
 7. **Supports theme**: CSS uses `var(--color-*, fallback)` for host integration
+
+### Tool rendering matrix
+
+Every registered tool gets a per-tool `ui://` resource URI and viewer HTML.
+The viewer renders each tool's output using shape-based routing — no tool-name
+knowledge required. The table below maps every tool to its viewer component and
+current implementation status.
+
+**Viewer components:**
+- **Table** — `TableView` (sortable table from `[]map[string]any`)
+- **Chart** — `MetricsTable` (Chart.js bar chart + sortable table from self-describing data)
+- **YAML** — `YamlView` (Prism.js syntax-highlighted YAML)
+- **Text** — `GenericView` (plain `<pre>` block)
+
+#### Core toolset
+
+| Tool | Description | Viewer | Status |
+|------|------------|--------|--------|
+| `pods_list` | List pods (all namespaces) | Table | Done |
+| `pods_list_in_namespace` | List pods (single namespace) | Table | Done |
+| `pods_get` | Get single pod | YAML | Pending |
+| `pods_delete` | Delete a pod | Text | — |
+| `pods_top` | Pod CPU/memory metrics | Chart | Done |
+| `pods_exec` | Execute command in pod | Text | — |
+| `pods_log` | Stream pod logs | Text | — |
+| `pods_run` | Create and run a pod | YAML | Pending |
+| `nodes_top` | Node CPU/memory metrics | Chart | Done |
+| `nodes_log` | Stream node journal logs | Text | — |
+| `nodes_stats_summary` | Node stats summary (JSON) | Text | — |
+| `namespaces_list` | List namespaces | Table | Done |
+| `projects_list` | List OpenShift projects | Table | Done |
+| `events_list` | List cluster events | YAML | Pending |
+| `resources_list` | List any resource kind | Table | Done |
+| `resources_get` | Get single resource | YAML | Pending |
+| `resources_create_or_update` | Create or update resource | YAML | Pending |
+| `resources_delete` | Delete a resource | Text | — |
+| `resources_scale` | Scale a resource | YAML | Pending |
+
+#### Config toolset
+
+| Tool | Description | Viewer | Status |
+|------|------------|--------|--------|
+| `configuration_view` | Show kubeconfig | YAML | Pending |
+| `configuration_contexts_list` | List kubeconfig contexts | Text | — |
+| `targets_list` | List configured targets | Text | — |
+
+#### Helm toolset
+
+| Tool | Description | Viewer | Status |
+|------|------------|--------|--------|
+| `helm_install` | Install a Helm chart | Text | — |
+| `helm_list` | List Helm releases | Text | — |
+| `helm_uninstall` | Uninstall a Helm release | Text | — |
+
+#### KCP toolset
+
+| Tool | Description | Viewer | Status |
+|------|------------|--------|--------|
+| `kcp_workspaces_list` | List KCP workspaces | Text | — |
+| `kcp_workspace_describe` | Describe a KCP workspace | YAML | Pending |
+
+#### Kiali toolset
+
+| Tool | Description | Viewer | Status |
+|------|------------|--------|--------|
+| `kiali_mesh_graph` | Service mesh graph (JSON) | Text | — |
+| `kiali_get_metrics` | Resource metrics (JSON) | Text | — |
+| `kiali_get_traces` | Distributed traces (JSON) | Text | — |
+| `kiali_get_resource_details` | Resource details (JSON) | Text | — |
+| `kiali_workload_logs` | Workload pod logs | Text | — |
+| `kiali_manage_istio_config_read` | Read Istio config (JSON) | Text | — |
+| `kiali_manage_istio_config` | Manage Istio config (JSON) | Text | — |
+
+#### KubeVirt toolset
+
+| Tool | Description | Viewer | Status |
+|------|------------|--------|--------|
+| `vm_create` | Create a VirtualMachine | YAML | Pending |
+| `vm_clone` | Clone a VirtualMachine | YAML | Pending |
+| `vm_lifecycle` | Start/stop/restart a VM | YAML | Pending |
+
+#### Summary
+
+| Viewer | Tools | Done | Pending |
+|--------|-------|------|---------|
+| Table | 7 | 7 | 0 |
+| Chart | 2 | 2 | 0 |
+| YAML | 12 | 0 | 12 |
+| Text | 12 | — | — |
+| **Total** | **33** | **9** | **12** |
+
+Text-output tools (logs, exec, delete confirmations, Helm output, Kiali JSON) don't
+benefit from specialized rendering — `GenericView` is the correct component. The 12
+pending YAML tools are the primary target for the Prism.js syntax highlighting work
+described in [Section 13](#13-yaml-syntax-highlighting).
 
 ## 9. Output Layer
 
@@ -924,6 +1032,166 @@ the referenced resources.
 
 ---
 
+## 13. YAML Syntax Highlighting
+
+### Problem
+
+Tools that return single Kubernetes resources (`pods_get`, `resources_get`,
+`resources_create_or_update`, `resources_scale`, etc.) produce YAML text output via
+`output.MarshalYaml()`. These tools use `NewToolCallResult(text)` (text-only, no
+`structuredContent`), so the viewer's rendering cascade falls through to `GenericView` —
+a plain `<pre>` block with no highlighting.
+
+For single-resource operations, YAML *is* the primary output format. Providing syntax
+highlighting makes the output significantly more readable, especially for large resources
+with deeply nested specs.
+
+### Library choice: Prism.js
+
+| Candidate | Core Size | YAML Grammar | Module Format | API | Verdict |
+|-----------|-----------|-------------|---------------|-----|---------|
+| **Prism.js 1.30.0** | 7.5 KB (minified) | 1.9 KB (minified) | IIFE (`window.Prism`) | **Sync**: `Prism.highlight()` | **Selected** |
+| highlight.js 11.11.1 | 76 KB (not minified) | 5 KB (not minified) | CJS/ESM only | Sync but needs registration | Rejected — no pre-minified builds, 10× larger core |
+| speed-highlight 1.2.14 | 23 KB (all 34 langs bundled) | 0.3 KB (minimal) | ESM only | Async (`Promise`) | Rejected — ESM-only, async API, monolithic bundle |
+
+**Why Prism.js:**
+
+1. **Pre-minified components** — `prism-core.min.js` (7.5 KB) + `prism-yaml.min.js` (1.9 KB)
+   can be vendored directly, matching the existing no-build-step approach
+2. **IIFE format** — loads via `<script>`, sets `window.Prism`, same pattern as HTM/Preact
+3. **Synchronous API** — `Prism.highlight(code, Prism.languages.yaml, 'yaml')` returns an
+   HTML string with `<span class="token ...">` wrappers, ideal for Preact rendering via
+   `dangerouslySetInnerHTML`
+4. **Comprehensive YAML grammar** — handles all YAML features: keys, scalars, multi-line
+   block scalars, anchors (`*ref`, `&anchor`), tags (`!!str`), datetime literals,
+   booleans, null, quoted strings, comments, directives (`%YAML`)
+5. **Modest size impact** — +9.4 KB on top of existing ~220 KB (~4% increase)
+
+### Vendoring
+
+Two new files in `pkg/mcpapps/vendor/`:
+
+```
+vendor/
+├── htm-preact-standalone.umd.js   # existing (~13 KB)
+├── chart.umd.min.js               # existing (~205 KB)
+├── prism-core.min.js              # new (~7.5 KB, prismjs@1.30.0)
+└── prism-yaml.min.js              # new (~1.9 KB, prismjs@1.30.0)
+```
+
+Downloaded via `make vendor-js` from jsdelivr CDN (same mechanism as existing vendors).
+
+**Important**: Prism auto-highlights all `<code>` elements on DOMContentLoaded by default.
+This must be disabled by setting `window.Prism = { manual: true }` **before** loading the
+Prism core script. The viewer controls highlighting explicitly via the `Prism.highlight()` API.
+
+### Theming
+
+Rather than vendoring a Prism theme file, the viewer provides a custom theme in `style.css`
+using the existing `light-dark()` CSS function. This ensures YAML highlighting integrates
+with the host's theme (dark/light mode) and CSS custom properties.
+
+Prism token classes used by the YAML grammar:
+
+| Token class | YAML element | Light color | Dark color |
+|-------------|-------------|-------------|------------|
+| `.token.atrule` | Keys (`apiVersion:`, `metadata:`) | `#07a` (blue) | `#cc99cd` (purple) |
+| `.token.string` | Quoted strings | `#690` (green) | `#7ec699` (green) |
+| `.token.number`, `.token.datetime` | Numbers, dates | `#905` (magenta) | `#f08d49` (orange) |
+| `.token.important` | Booleans (`true`/`false`), null | `#e90` (amber) | `#f8c555` (yellow) |
+| `.token.comment` | Comments (`# ...`) | `#708090` (gray) | `#999` (gray) |
+| `.token.punctuation` | Structural chars (`:`, `-`, `|`, `>`) | `#999` | `#ccc` |
+| `.token.tag` | Tags (`!!str`, `!custom`) | `#905` | `#e2777a` (pink) |
+| `.token.scalar` | Block scalars (`|`, `>` multi-line) | `#690` (green) | `#7ec699` (green) |
+
+CSS implementation (added to `style.css`):
+
+```css
+/* Prism.js YAML syntax highlighting — theme via light-dark() */
+.token.atrule { color: light-dark(#07a, #cc99cd); }
+.token.string, .token.scalar { color: light-dark(#690, #7ec699); }
+.token.number, .token.datetime { color: light-dark(#905, #f08d49); }
+.token.important { color: light-dark(#e90, #f8c555); }
+.token.comment { color: light-dark(#708090, #999); font-style: italic; }
+.token.punctuation { color: light-dark(#999, #ccc); }
+.token.tag { color: light-dark(#905, #e2777a); }
+```
+
+### YamlView component
+
+A new `YamlView` component in `components.js` renders syntax-highlighted YAML:
+
+```javascript
+function YamlView(props) {
+  var highlighted = useMemo(function() {
+    if (!props.text || typeof Prism === 'undefined') return null;
+    return Prism.highlight(props.text, Prism.languages.yaml, 'yaml');
+  }, [props.text]);
+  if (!highlighted) {
+    return html`<${GenericView} text=${props.text} />`;
+  }
+  return html`<pre class="raw yaml"
+    dangerouslySetInnerHTML=${{ __html: highlighted }} />`;
+}
+```
+
+- Uses `Prism.highlight()` synchronously inside `useMemo` — no re-tokenization on re-render
+- Falls back to `GenericView` if Prism is unavailable
+- Reuses the existing `pre.raw` CSS class for consistent container styling
+
+### YAML detection in app.js
+
+The viewer needs to detect when text content is YAML and route to `YamlView` instead of
+`GenericView`. YAML detection uses a simple heuristic on the text content:
+
+```javascript
+function looksLikeYaml(text) {
+  if (!text) return false;
+  // Kubernetes YAML: starts with apiVersion, kind, or metadata key, or --- document marker
+  var first = text.trimStart().slice(0, 40);
+  return /^(apiVersion:|kind:|metadata:|---)/.test(first);
+}
+```
+
+This is deliberately conservative — it targets Kubernetes resource YAML specifically rather
+than arbitrary YAML. The patterns `apiVersion:`, `kind:`, `metadata:`, and `---` cover all
+standard Kubernetes resource output from `MarshalYaml()`.
+
+Updated routing in `app.js`:
+
+```javascript
+// Route to the appropriate view based on data shape
+if (structured && structured.chart && structured.columns && Array.isArray(structured.items)) {
+  return html`<${components.MetricsTable} data=${structured} />`;
+}
+if (structured && Array.isArray(structured) && structured.length > 0 && typeof structured[0] === 'object') {
+  return html`<${components.TableView} data=${structured} />`;
+}
+if (structured) {
+  return html`<${components.GenericView} text=${JSON.stringify(structured, null, 2)} />`;
+}
+// Text-only results: detect YAML for syntax highlighting
+if (looksLikeYaml(textContent)) {
+  return html`<${components.YamlView} text=${textContent} />`;
+}
+return html`<${components.GenericView} text=${textContent} />`;
+```
+
+### HTML assembly changes
+
+Two new `INJECT_*` placeholders in `viewer.html` for Prism scripts, loaded after Chart.js
+and before `protocol.js`. A `window.Prism = { manual: true }` assignment must appear
+**before** the Prism core script to prevent auto-highlighting:
+
+```html
+<!-- Vendor: Prism.js (YAML syntax highlighting) -->
+<script>window.Prism = { manual: true };</script>
+<script>INJECT_VENDOR_PRISM_CORE</script>
+<script>INJECT_VENDOR_PRISM_YAML</script>
+```
+
+---
+
 ## Appendix A: Research and Development Journal
 
 > **Note**: This appendix contains research context, implementation status tracking, development
@@ -1045,10 +1313,17 @@ implementing a Pods Top dashboard with MCP Apps.
 | Tests | `pkg/mcp/pods_top_test.go` | Done — structured content assertions for columns, chart, items |
 | Tests | `pkg/mcp/nodes_top_test.go` | Done — structured content assertions for self-describing shape |
 
-#### Pending — Phase 4: Polish
+#### Pending — Phase 4: YAML Syntax Highlighting + Polish
 
 | Feature | Status |
 |---------|--------|
+| Vendor Prism.js core + YAML grammar | Not started — `make vendor-js` to download `prism-core.min.js` + `prism-yaml.min.js` |
+| Prism.js theme CSS (`light-dark()`) | Not started — token color classes in `style.css` |
+| `YamlView` component | Not started — Prism.highlight() + `dangerouslySetInnerHTML` in `components.js` |
+| YAML detection + routing | Not started — `looksLikeYaml()` heuristic + route in `app.js` |
+| HTML assembly (`viewer.html`) | Not started — `INJECT_VENDOR_PRISM_CORE/YAML` placeholders, `Prism.manual = true` |
+| Embed + assembly (`mcpapps.go`) | Not started — add Prism placeholder replacements to `buildBaseHTML()` |
+| Tests for Prism embed/placeholder | Not started |
 | Structured content for remaining non-list tool handlers | Not started |
 | Refresh via `callServerTool()` | Not started |
 | Compact height management via `sendSizeChanged()` | Not started |
