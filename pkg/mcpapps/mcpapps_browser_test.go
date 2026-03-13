@@ -58,11 +58,13 @@ func (s *BrowserSuite) SetupSuite() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/harness", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, testHarnessHTML)
+		_, err := fmt.Fprint(w, testHarnessHTML)
+		s.Require().NoError(err)
 	})
 	mux.HandleFunc("/viewer.html", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, ViewerHTMLForTool("test_tool"))
+		_, err := fmt.Fprint(w, ViewerHTMLForTool("test_tool"))
+		s.Require().NoError(err)
 	})
 	s.server = httptest.NewServer(mux)
 	s.browser = rod.New().MustConnect()
