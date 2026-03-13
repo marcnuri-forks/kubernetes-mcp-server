@@ -55,3 +55,11 @@ pre.raw {
 .chart-container canvas {
   max-height: 250px;
 }
+/* Prism.js YAML syntax highlighting — theme via light-dark() */
+.token.atrule { color: light-dark(#07a, #cc99cd); }
+.token.string, .token.scalar { color: light-dark(#690, #7ec699); }
+.token.number, .token.datetime { color: light-dark(#905, #f08d49); }
+.token.important { color: light-dark(#e90, #f8c555); font-weight: normal; }
+.token.comment { color: light-dark(#708090, #999); font-style: italic; }
+.token.punctuation { color: light-dark(#999, #ccc); }
+.token.tag { color: light-dark(#905, #e2777a); }

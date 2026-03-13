@@ -22,6 +22,8 @@ func (s *McpAppsSuite) TestViewerHTMLForTool() {
 		s.NotContains(html, "INJECT_CSS")
 		s.NotContains(html, "INJECT_VENDOR_HTM_PREACT")
 		s.NotContains(html, "INJECT_VENDOR_CHART_JS")
+		s.NotContains(html, "INJECT_VENDOR_PRISM_CORE")
+		s.NotContains(html, "INJECT_VENDOR_PRISM_YAML")
 		s.NotContains(html, "INJECT_PROTOCOL_JS")
 		s.NotContains(html, "INJECT_COMPONENTS_JS")
 		s.NotContains(html, "INJECT_APP_JS")
@@ -34,6 +36,15 @@ func (s *McpAppsSuite) TestViewerHTMLForTool() {
 	s.Run("contains Chart.js content", func() {
 		html := ViewerHTMLForTool("pods_list")
 		s.Contains(html, "Chart")
+	})
+	s.Run("contains Prism.js content with manual mode", func() {
+		html := ViewerHTMLForTool("pods_list")
+		s.Contains(html, "window.Prism")
+		s.Contains(html, "Prism.languages")
+	})
+	s.Run("contains YamlView component", func() {
+		html := ViewerHTMLForTool("pods_list")
+		s.Contains(html, "YamlView")
 	})
 	s.Run("contains mcpProtocol namespace", func() {
 		html := ViewerHTMLForTool("pods_list")
@@ -84,6 +95,8 @@ func (s *McpAppsSuite) TestEmbeddedFS() {
 		}
 		s.Contains(names, "htm-preact-standalone.umd.js")
 		s.Contains(names, "chart.umd.min.js")
+		s.Contains(names, "prism-core.min.js")
+		s.Contains(names, "prism-yaml.min.js")
 	})
 	s.Run("all embedded files are non-empty", func() {
 		files := []string{
@@ -94,6 +107,8 @@ func (s *McpAppsSuite) TestEmbeddedFS() {
 			"viewer/app.js",
 			"vendor/htm-preact-standalone.umd.js",
 			"vendor/chart.umd.min.js",
+			"vendor/prism-core.min.js",
+			"vendor/prism-yaml.min.js",
 		}
 		for _, f := range files {
 			data, err := fs.ReadFile(embeddedFS, f)

@@ -35,6 +35,8 @@ func buildBaseHTML() string {
 		baseHTML = strings.Replace(baseHTML, "INJECT_CSS", mustReadFile("viewer/style.css"), 1)
 		baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_HTM_PREACT", mustReadFile("vendor/htm-preact-standalone.umd.js"), 1)
 		baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_CHART_JS", mustReadFile("vendor/chart.umd.min.js"), 1)
+		baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_PRISM_CORE", mustReadFile("vendor/prism-core.min.js"), 1)
+		baseHTML = strings.Replace(baseHTML, "INJECT_VENDOR_PRISM_YAML", mustReadFile("vendor/prism-yaml.min.js"), 1)
 		baseHTML = strings.Replace(baseHTML, "INJECT_PROTOCOL_JS", mustReadFile("viewer/protocol.js"), 1)
 		baseHTML = strings.Replace(baseHTML, "INJECT_COMPONENTS_JS", mustReadFile("viewer/components.js"), 1)
 		baseHTML = strings.Replace(baseHTML, "INJECT_APP_JS", mustReadFile("viewer/app.js"), 1)

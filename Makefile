@@ -152,6 +152,7 @@ print-git-tag-version: ## Print the GIT_TAG_VERSION
 
 HTM_VERSION ?= 3.1.1
 CHART_JS_VERSION ?= 4.4.8
+PRISM_VERSION ?= 1.30.0
 MCP_APPS_VENDOR_DIR ?= pkg/mcpapps/vendor
 
 .PHONY: vendor-js
@@ -161,6 +162,10 @@ vendor-js: ## Download vendored JavaScript dependencies for MCP Apps
 		-o $(MCP_APPS_VENDOR_DIR)/htm-preact-standalone.umd.js
 	curl -sL "https://cdn.jsdelivr.net/npm/chart.js@$(CHART_JS_VERSION)/dist/chart.umd.min.js" \
 		-o $(MCP_APPS_VENDOR_DIR)/chart.umd.min.js
+	curl -sL "https://cdn.jsdelivr.net/npm/prismjs@$(PRISM_VERSION)/components/prism-core.min.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/prism-core.min.js
+	curl -sL "https://cdn.jsdelivr.net/npm/prismjs@$(PRISM_VERSION)/components/prism-yaml.min.js" \
+		-o $(MCP_APPS_VENDOR_DIR)/prism-yaml.min.js
 
 # Include build configuration files
 -include build/*.mk

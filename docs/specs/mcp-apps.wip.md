@@ -1147,15 +1147,26 @@ The viewer needs to detect when text content is YAML and route to `YamlView` ins
 ```javascript
 function looksLikeYaml(text) {
   if (!text) return false;
-  // Kubernetes YAML: starts with apiVersion, kind, or metadata key, or --- document marker
-  var first = text.trimStart().slice(0, 40);
-  return /^(apiVersion:|kind:|metadata:|---)/.test(first);
+  // Some tools prepend "# comment\n" headers for the LLM — skip those before checking.
+  var lines = text.trimStart().split('\n');
+  for (var i = 0; i < lines.length && i < 5; i++) {
+    var line = lines[i].trimStart();
+    if (line === '' || line.charAt(0) === '#') continue;
+    return /^(apiVersion:|kind:|metadata:|---)/.test(line);
+  }
+  return false;
 }
 ```
 
 This is deliberately conservative — it targets Kubernetes resource YAML specifically rather
 than arbitrary YAML. The patterns `apiVersion:`, `kind:`, `metadata:`, and `---` cover all
 standard Kubernetes resource output from `MarshalYaml()`.
+
+Several tools prepend a `# ` YAML comment header before the YAML body (e.g.,
+`# The following resources (YAML) have been created or updated successfully`).
+The detection skips up to 5 leading blank/comment lines before checking for
+Kubernetes YAML markers. Prism.js handles the `#` comment lines natively with
+proper syntax highlighting.
 
 Updated routing in `app.js`:
 

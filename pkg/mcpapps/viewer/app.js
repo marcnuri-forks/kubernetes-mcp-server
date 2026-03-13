@@ -10,6 +10,19 @@
   var protocol = window.mcpProtocol;
   var components = window.mcpComponents;
 
+  // Detect Kubernetes YAML from text content.
+  // Some tools prepend "# comment\n" headers for the LLM — skip those before checking.
+  function looksLikeYaml(text) {
+    if (!text) return false;
+    var lines = text.trimStart().split('\n');
+    for (var i = 0; i < lines.length && i < 5; i++) {
+      var line = lines[i].trimStart();
+      if (line === '' || line.charAt(0) === '#') continue;
+      return /^(apiVersion:|kind:|metadata:|---)/.test(line);
+    }
+    return false;
+  }
+
   // Tool name injected by the server via ViewerHTMLForTool
   var embeddedToolName = window.__mcpToolName || '';
 
@@ -159,6 +172,10 @@
     // Fallback: try to render structured as JSON, or raw text
     if (structured) {
       return html`<${components.GenericView} text=${JSON.stringify(structured, null, 2)} />`;
+    }
+    // Text-only results: detect YAML for syntax highlighting
+    if (looksLikeYaml(textContent)) {
+      return html`<${components.YamlView} text=${textContent} />`;
     }
     return html`<${components.GenericView} text=${textContent} />`;
   }

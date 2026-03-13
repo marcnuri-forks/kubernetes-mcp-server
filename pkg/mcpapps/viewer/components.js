@@ -209,11 +209,25 @@
     return html`<pre class="raw">${props.text || 'No content'}</pre>`;
   }
 
+  // YamlView: syntax-highlighted YAML using Prism.js
+  function YamlView(props) {
+    var highlighted = useMemo(function() {
+      if (!props.text || typeof Prism === 'undefined' || !Prism.languages.yaml) return null;
+      return Prism.highlight(props.text, Prism.languages.yaml, 'yaml');
+    }, [props.text]);
+    if (!highlighted) {
+      return html`<${GenericView} text=${props.text} />`;
+    }
+    return html`<pre class="raw yaml"
+      dangerouslySetInnerHTML=${{ __html: highlighted }} />`;
+  }
+
   // Expose components
   window.mcpComponents = {
     SortableTable: SortableTable,
     TableView: TableView,
     MetricsTable: MetricsTable,
-    GenericView: GenericView
+    GenericView: GenericView,
+    YamlView: YamlView
   };
 })();
