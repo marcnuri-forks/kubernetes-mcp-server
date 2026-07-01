@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -12,7 +11,9 @@ import (
 	"github.com/containers/kubernetes-mcp-server/pkg/kubernetes"
 )
 
-func initNamespaces(p api.FilteringProvider) []api.ServerTool {
+// initNamespaces no longer needs the FilteringProvider: projects_list declares its
+// OpenShift requirement via RequiredGVKs (evaluated centrally in the mcp filter layer).
+func initNamespaces(_ api.FilteringProvider) []api.ServerTool {
 	ret := make([]api.ServerTool, 0)
 	ret = append(ret, api.ServerTool{
 		Tool: api.Tool{
@@ -51,12 +52,8 @@ func initNamespaces(p api.FilteringProvider) []api.ServerTool {
 			},
 		},
 		Handler: projectsList,
-		TargetCompatibilityFilters: []func() bool{
-			func() bool {
-				return p.AnyTargetHasGVKs(context.TODO(), []schema.GroupVersionKind{
-					{Group: "project.openshift.io", Version: "v1", Kind: "Project"},
-				})
-			},
+		RequiredGVKs: []schema.GroupVersionKind{
+			{Group: "project.openshift.io", Version: "v1", Kind: "Project"},
 		},
 	})
 	return ret

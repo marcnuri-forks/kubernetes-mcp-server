@@ -7,6 +7,7 @@ import (
 
 	"github.com/containers/kubernetes-mcp-server/pkg/output"
 	"github.com/google/jsonschema-go/jsonschema"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type ServerTool struct {
@@ -14,9 +15,11 @@ type ServerTool struct {
 	Handler            ToolHandlerFunc
 	ClusterAware       *bool
 	TargetListProvider *bool
-	// TargetCompatibilityFilters is a slice of closures, each of which answers whether the ServerTool
-	// should be exposed (true) or not (false).
-	TargetCompatibilityFilters []func() bool
+	// RequiredGVKs declares the GroupVersionKinds a tool needs in order to be usable.
+	// When target-compatibility tool filtering is enabled, the tool is exposed only if
+	// at least one target provides all of these GVKs (see FilteringProvider.AnyTargetHasGVKs).
+	// An empty/nil slice means the tool is always exposed.
+	RequiredGVKs []schema.GroupVersionKind
 }
 
 // IsClusterAware indicates whether the tool can accept a "cluster" or "context" parameter

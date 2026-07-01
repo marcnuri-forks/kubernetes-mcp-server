@@ -78,13 +78,6 @@ func (c *Configuration) isToolApplicable(tool api.ServerTool) bool {
 	if c.DisabledTools != nil && slices.Contains(c.DisabledTools, tool.Tool.Name) {
 		return false
 	}
-	if c.EnableTargetCompatibilityToolFilters {
-		for _, filter := range tool.TargetCompatibilityFilters {
-			if !filter() {
-				return false
-			}
-		}
-	}
 	return true
 }
 
@@ -388,6 +381,7 @@ func (s *Server) collectApplicableTools(cfg *Configuration) []api.ServerTool {
 	filter := CompositeFilter(
 		cfg.isToolApplicable,
 		ShouldIncludeTargetListTool(s.p.GetTargetParameterName(), s.p.IsMultiTarget()),
+		ShouldIncludeByTargetCompatibility(context.TODO(), s.p, cfg.IsTargetCompatibilityToolFiltersEnabled()),
 	)
 	mutator := ComposeMutators(
 		WithTargetParameter(s.p.GetDefaultTarget(), s.p.GetTargetParameterName(), s.p.IsMultiTarget()),
