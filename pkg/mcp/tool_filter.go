@@ -23,14 +23,23 @@ func CompositeFilter(filters ...ToolFilter) ToolFilter {
 }
 
 // ShouldIncludeByTargetCompatibility gates tools that declare RequiredGVKs behind
-// target-compatibility filtering. A tool is included when it declares no RequiredGVKs,
-// when the feature is disabled, or when at least one target provides all declared GVKs.
-// This centralizes the "any target has the GVKs; assume yes on error" semantics that
-// were previously duplicated in per-tool closures. The enabled flag is sourced from the
-// applied Configuration (not the provider) so a SIGHUP reload that toggles it takes effect.
-func ShouldIncludeByTargetCompatibility(ctx context.Context, p api.FilteringProvider, enabled bool) ToolFilter {
+// target-compatibility filtering, centralizing the "any target has the GVKs; assume
+// yes on error" semantics that were previously duplicated in per-tool closures.
+//
+// A tool with no RequiredGVKs is always included. Otherwise:
+//   - Single-target providers always evaluate the GVKs, restoring the pre-refactor
+//     behavior where OpenShift-only tools are hidden on vanilla Kubernetes.
+//   - Multi-target providers only evaluate when the feature is enabled, keeping the
+//     (potentially expensive) cross-target discovery fan-out opt-in.
+//
+// The enabled flag is sourced from the applied Configuration (not the provider) so a
+// SIGHUP reload that toggles it takes effect.
+func ShouldIncludeByTargetCompatibility(ctx context.Context, p api.FilteringProvider, isMultiTarget, enabled bool) ToolFilter {
 	return func(tool api.ServerTool) bool {
-		if len(tool.RequiredGVKs) == 0 || !enabled {
+		if len(tool.RequiredGVKs) == 0 {
+			return true
+		}
+		if isMultiTarget && !enabled {
 			return true
 		}
 		return p.AnyTargetHasGVKs(ctx, tool.RequiredGVKs)

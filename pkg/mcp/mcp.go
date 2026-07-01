@@ -381,7 +381,7 @@ func (s *Server) collectApplicableTools(cfg *Configuration) []api.ServerTool {
 	filter := CompositeFilter(
 		cfg.isToolApplicable,
 		ShouldIncludeTargetListTool(s.p.GetTargetParameterName(), s.p.IsMultiTarget()),
-		ShouldIncludeByTargetCompatibility(context.TODO(), s.p, cfg.IsTargetCompatibilityToolFiltersEnabled()),
+		ShouldIncludeByTargetCompatibility(context.TODO(), s.p, s.p.IsMultiTarget(), cfg.IsTargetCompatibilityToolFiltersEnabled()),
 	)
 	mutator := ComposeMutators(
 		WithTargetParameter(s.p.GetDefaultTarget(), s.p.GetTargetParameterName(), s.p.IsMultiTarget()),

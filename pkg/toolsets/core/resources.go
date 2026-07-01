@@ -15,17 +15,19 @@ import (
 )
 
 func initResources(p api.FilteringProvider) []api.ServerTool {
-	// TODO: What purpose is this string serving in Description fields?
+	// commonApiVersion is appended to the resources_* descriptions as a hint listing
+	// example apiVersion/kind values the model is likely to need.
 	commonApiVersion := "v1 Pod, v1 Service, v1 Node, apps/v1 Deployment, networking.k8s.io/v1 Ingress"
-	// Only check GVKs when target compatibility filtering is enabled
-	if p.IsTargetCompatibilityToolFiltersEnabled() {
-		if p.AnyTargetHasGVKs(context.TODO(), []schema.GroupVersionKind{
+	// Include the OpenShift Route kind unless we can positively determine the target(s)
+	// lack it. Single-target always checks; multi-target discovery fan-out is opt-in and
+	// otherwise optimistically includes it (mirrors the tool-gating behavior).
+	includeRoute := true
+	if !p.IsMultiTarget() || p.IsTargetCompatibilityToolFiltersEnabled() {
+		includeRoute = p.AnyTargetHasGVKs(context.TODO(), []schema.GroupVersionKind{
 			{Group: "route.openshift.io", Version: "v1", Kind: "Route"},
-		}) {
-			commonApiVersion += ", route.openshift.io/v1 Route"
-		}
-	} else {
-		// When filtering disabled, optimistically include OpenShift resources in description
+		})
+	}
+	if includeRoute {
 		commonApiVersion += ", route.openshift.io/v1 Route"
 	}
 	commonApiVersion = fmt.Sprintf("(common apiVersion and kind include: %s)", commonApiVersion)

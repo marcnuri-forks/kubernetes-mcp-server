@@ -110,7 +110,9 @@ func (s *WatchKubeConfigSuite) TestNotifiesPromptsChangeMultipleTimes() {
 
 func (s *WatchKubeConfigSuite) TestClearsNoLongerAvailableTools() {
 	s.Run("with target compatibility filtering disabled", func() {
-		// When filtering is disabled, OpenShift tools are always present
+		// Single-target providers always evaluate GVK compatibility; the flag only
+		// gates the multi-target fan-out. The OpenShift tool therefore tracks the
+		// cluster's OpenShift-ness even when the flag is disabled.
 		s.Cfg.EnableTargetCompatibilityToolFilters = false
 		s.mockServer.Handle(test.NewInOpenShiftHandler())
 		s.InitMcpClient()
@@ -129,11 +131,14 @@ func (s *WatchKubeConfigSuite) TestClearsNoLongerAvailableTools() {
 			s.Truef(found, "expected OpenShift tool to be available")
 		})
 
-		s.Run("OpenShift tool remains after switching to non-OpenShift", func() {
+		s.Run("OpenShift tool is removed after switching to non-OpenShift", func() {
 			capture := s.StartCapturingNotifications()
 
 			// Reload Config without OpenShift
 			s.mockServer.ResetHandlers()
+			// Add back non-OpenShift discovery handler so discovery succeeds and
+			// reports the Project GVK as absent (rather than failing open).
+			s.mockServer.Handle(test.NewDiscoveryClientHandler())
 			s.WriteKubeconfig()
 			capture.RequireNotification(s.T(), 5*time.Second, "notifications/tools/list_changed")
 			time.Sleep(serverSettleDelay)
@@ -141,14 +146,9 @@ func (s *WatchKubeConfigSuite) TestClearsNoLongerAvailableTools() {
 			tools, err := s.ListTools()
 			s.Require().NoError(err, "call ListTools failed")
 			s.Require().NotNil(tools, "list tools failed")
-			var found bool
 			for _, tool := range tools.Tools {
-				if tool.Name == "projects_list" {
-					found = true
-					break
-				}
+				s.Require().Falsef(tool.Name == "projects_list", "expected OpenShift tool to be removed after switching to non-OpenShift")
 			}
-			s.Truef(found, "expected OpenShift tool to remain when filtering disabled")
 		})
 	})
 
@@ -254,22 +254,19 @@ func (s *WatchClusterStateSuite) TestNotifiesToolsChangeMultipleTimes() {
 
 func (s *WatchClusterStateSuite) TestDetectsOpenShiftClusterStateChange() {
 	s.Run("with target compatibility filtering disabled", func() {
-		// When filtering is disabled, OpenShift tools are always present
+		// Single-target providers always evaluate GVK compatibility; the flag only
+		// gates the multi-target fan-out. OpenShift-only tools therefore stay hidden
+		// on a non-OpenShift cluster even when the flag is disabled.
 		s.Cfg.EnableTargetCompatibilityToolFilters = false
 		s.InitMcpClient()
 
-		s.Run("OpenShift tool is available even on non-OpenShift", func() {
+		s.Run("OpenShift tool is not available on non-OpenShift", func() {
 			tools, err := s.ListTools()
 			s.Require().NoError(err, "call ListTools failed")
 			s.Require().NotNil(tools, "list tools failed")
-			var found bool
 			for _, tool := range tools.Tools {
-				if tool.Name == "projects_list" {
-					found = true
-					break
-				}
+				s.Require().Falsef(tool.Name == "projects_list", "expected OpenShift tool to stay hidden on non-OpenShift even when the flag is disabled")
 			}
-			s.Truef(found, "expected OpenShift tool to be available when filtering disabled")
 		})
 	})
 

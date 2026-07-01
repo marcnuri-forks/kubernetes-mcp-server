@@ -25,6 +25,8 @@ import (
 
 type FilterProvider struct{}
 
+func (p *FilterProvider) IsMultiTarget() bool { return false }
+
 func (p *FilterProvider) AnyTargetHasGVKs(_ context.Context, _ []schema.GroupVersionKind) bool {
 	return true
 }
