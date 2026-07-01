@@ -359,7 +359,9 @@ func (h *DiscoveryClientHandler) AddAPIResourceList(resourceList metav1.APIResou
 }
 
 // NewInOpenShiftHandler creates a DiscoveryClientHandler configured for OpenShift clusters.
-// It includes the OpenShift project.openshift.io API group by default.
+// It includes the project.openshift.io and route.openshift.io API groups by default (matching
+// the OpenShift CRD set registered for envtest), so tools and descriptions gated on either GVK
+// resolve as they would on a real OpenShift cluster.
 // Additional API resource lists can be passed to extend the handler.
 func NewInOpenShiftHandler(additionalResources ...metav1.APIResourceList) *DiscoveryClientHandler {
 	openShiftResources := []metav1.APIResourceList{
@@ -371,6 +373,17 @@ func NewInOpenShiftHandler(additionalResources ...metav1.APIResourceList) *Disco
 					Kind:       "Project",
 					Namespaced: false,
 					ShortNames: []string{"pr"},
+					Verbs:      metav1.Verbs{"create", "delete", "get", "list", "patch", "update", "watch"},
+				},
+			},
+		},
+		{
+			GroupVersion: "route.openshift.io/v1",
+			APIResources: []metav1.APIResource{
+				{
+					Name:       "routes",
+					Kind:       "Route",
+					Namespaced: true,
 					Verbs:      metav1.Verbs{"create", "delete", "get", "list", "patch", "update", "watch"},
 				},
 			},
